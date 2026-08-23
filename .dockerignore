@@ -1,0 +1,17 @@
+node_modules
+.next
+.vinext
+.wrangler
+.git
+.gitignore
+.DS_Store
+*.log
+npm-debug.log*
+.env*
+docker-compose*.yml
+Dockerfile
+.dockerignore
+outputs
+work
+dist
+coverage

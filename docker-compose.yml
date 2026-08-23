@@ -1,0 +1,25 @@
+version: '3.8'
+
+# 本地开发环境 Docker Compose 配置
+# 端口: 3000 (Next.js 标准端口)
+
+services:
+  sites:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: krug-sites:latest
+    container_name: krug-sites
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+    restart: unless-stopped
+    networks:
+      - sites-network
+
+networks:
+  sites-network:
+    driver: bridge

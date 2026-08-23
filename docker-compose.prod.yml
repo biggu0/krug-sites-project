@@ -1,0 +1,44 @@
+version: '3.8'
+
+# 生产环境 Docker Compose 配置
+# 使用方式: docker-compose -f docker-compose.prod.yml up -d
+
+services:
+  sites:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: krug-sites:latest
+    container_name: krug-sites-prod
+    restart: always
+    ports:
+      - "${SITES_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+    networks:
+      - sites-network-prod
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  sites-network-prod:
+    driver: bridge
