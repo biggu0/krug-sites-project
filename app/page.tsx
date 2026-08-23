@@ -4,6 +4,20 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import TemplateEditor,{Point,TemplateRegions} from './TemplateEditor';
 
+if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
+  // 非 secure context（http://）下 crypto.randomUUID 不存在，补一个兼容实现
+  Object.defineProperty(crypto, 'randomUUID', {
+    value: () =>
+      'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      }),
+    configurable: true,
+    writable: true,
+  });
+}
+
 type Photo={id:string;file:File;url:string};
 type Transform={scale:number;x:number;y:number};
 type OrderStatus='pending'|'ready';
