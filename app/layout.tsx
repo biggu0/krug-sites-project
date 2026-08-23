@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'JHT ISP SYSTEM',
+  title: 'JHT 图片处理',
   description: '批量挂历订单排版与 300 DPI PDF 导出系统。',
 };
 
