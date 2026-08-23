@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: '挂历工房 - 客户定制 PDF 生成器',
-  description: '为 A4 挂历自动排列客户图片并生成 300 DPI 加工 PDF。',
+  title: 'JHT ISP SYSTEM',
+  description: '批量挂历订单排版与 300 DPI PDF 导出系统。',
 };
 
 export default function RootLayout({
