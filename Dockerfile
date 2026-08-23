@@ -7,11 +7,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# 复制源码并构建
+# 复制源码并构建（构建产物输出到 dist/）
 COPY . .
 RUN npm run build
 
 # 运行阶段
+# 注：vinext CLI 位于 devDependencies，但 `npm run start` 需要它，
+# 因此 runner 阶段直接复用 builder 的完整 node_modules（含 pnpm 符号链接结构）。
 FROM node:22-alpine AS runner
 
 WORKDIR /app
@@ -20,20 +22,10 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
 
-# 仅复制运行所需文件
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-
-# 复制构建产物与源码（vinext start 需要源码 + 构建产物）
-COPY --from=builder /app/.vinext ./.vinext
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/app ./app
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.ts ./next.config.ts
-COPY --from=builder /app/vite.config.ts ./vite.config.ts
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
-COPY --from=builder /app/eslint.config.mjs ./eslint.config.mjs
-COPY --from=builder /app/.openai ./.openai
+# 复制运行所需文件：构建产物 + 依赖 + package.json（提供 start 脚本）
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY package.json ./
 
 EXPOSE 3000
 
