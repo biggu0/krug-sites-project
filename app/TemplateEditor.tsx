@@ -6,12 +6,12 @@ export type Point={x:number;y:number;inX?:number;inY?:number;outX?:number;outY?:
 export type Region={x:number;y:number;width:number;height:number;curve:number;points?:Point[]};
 export type TemplateRegions={cover:Region;inner:Region};
 type Drag={index:number;kind:'point'|'in'|'out'};
-type Props={pages:string[];value:TemplateRegions;templateName:string;onSave:(value:TemplateRegions,name:string)=>void;onClose:()=>void};
+type Props={pages:string[];value:TemplateRegions;templateName:string;hasCover:boolean;onSave:(value:TemplateRegions,name:string)=>void;onClose:()=>void};
 
 const n=(value:number)=>Math.max(0,Math.min(100,value));
 const handle=(point:Point,kind:'in'|'out')=>({x:point[`${kind}X`]??point.x,y:point[`${kind}Y`]??point.y});
 
-export default function TemplateEditor({pages,value,templateName,onSave,onClose}:Props){
+export default function TemplateEditor({pages,value,templateName,hasCover,onSave,onClose}:Props){
   const [mode,setMode]=useState<'cover'|'inner'>('cover'),[regions,setRegions]=useState(value),[zoom,setZoom]=useState(1.15),[selected,setSelected]=useState(0),[name,setName]=useState(templateName);
   const stage=useRef<HTMLDivElement>(null),drag=useRef<Drag|null>(null);
   const region=regions[mode],points=region.points??[];
