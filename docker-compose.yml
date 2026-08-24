@@ -16,15 +16,16 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
-      WRANGLER_SEND_METRICS: "false"
+      AUTH_DB_PATH: /app/data/auth-db.json
+      AUTH_COOKIE_SECURE: "false"
     volumes:
-      - sites-d1-data:/app/.wrangler/state
+      - sites-auth-data:/app/data
     restart: unless-stopped
     networks:
       - sites-network
 
 volumes:
-  sites-d1-data:
+  sites-auth-data:
 
 networks:
   sites-network:

@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "node ./scripts/clean-dist.mjs && vinext build",
-    "start": "wrangler dev --config dist/server/wrangler.json --ip 0.0.0.0 --port ${PORT:-3000}",
-    "start:node": "vinext start",
+    "start": "vinext start",
+    "start:worker": "wrangler dev --config dist/server/wrangler.json --ip 0.0.0.0 --port ${PORT:-3000}",
     "sites:package": "npm run build && ./scripts/package-site.sh ./dist/site-package.tar.gz",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
