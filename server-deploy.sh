@@ -6,6 +6,7 @@
 #
 # 可选环境变量：
 #   SITES_PORT  服务对外端口（默认 3000）
+#   模板文件默认写入 COS，需要提供 TENCENT_COS_SECRET_ID / TENCENT_COS_SECRET_KEY / TENCENT_COS_REGION / TENCENT_COS_BUCKET
 
 set -e
 
@@ -52,9 +53,36 @@ if [ ! -f "drizzle/0000_auth.sql" ]; then
     exit 1
 fi
 
+if [ -f ".env" ]; then
+    set -a
+    . ./.env
+    set +a
+fi
+
 echo -e "${GREEN}✅ 源码检查通过${NC}"
 echo -e "${GREEN}✅ 数据库配置检查通过${NC}"
 echo ""
+
+if [ "${TEMPLATE_STORAGE_PROVIDER:-cos}" = "cos" ]; then
+    export TENCENT_COS_ENV_PREFIX=prod
+    missing_cos=0
+    for key in TENCENT_COS_SECRET_ID TENCENT_COS_SECRET_KEY TENCENT_COS_REGION TENCENT_COS_BUCKET; do
+        if [ -z "${!key}" ]; then
+            echo -e "${RED}❌ 错误：TEMPLATE_STORAGE_PROVIDER=cos 但缺少 $key${NC}"
+            missing_cos=1
+        fi
+    done
+    if [ "$missing_cos" -ne 0 ]; then
+        echo -e "${YELLOW}请在服务器 .env 或当前 shell 中补齐 COS 配置后重新部署。${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ COS 模板存储配置检查通过${NC}"
+fi
+
+echo -e "${YELLOW}模板存储：${TEMPLATE_STORAGE_PROVIDER:-cos}${NC}"
+if [ "${TEMPLATE_STORAGE_PROVIDER:-cos}" = "cos" ]; then
+    echo -e "${YELLOW}COS 路径前缀：${TENCENT_COS_PROJECT_PREFIX:-calendar}/${TENCENT_COS_ENV_PREFIX:-prod}/${TENCENT_COS_BASE_PATH:-uploads/}${NC}"
+fi
 
 echo -e "${YELLOW}准备重新部署站点服务...${NC}"
 echo -e "${YELLOW}账号数据会保存在 Docker 卷 sites-auth-data-prod 中，除非手动删除该卷。${NC}"
@@ -88,6 +116,13 @@ echo "   docker logs -f krug-sites-prod"
 echo ""
 echo -e "${YELLOW}🗄️ 数据库：${NC}"
 echo "   OpenAI Sites/Cloudflare 使用 D1；Docker 自托管使用 /app/data/auth-db.json（volume: sites-auth-data-prod）"
+echo ""
+echo -e "${YELLOW}📄 模板存储：${NC}"
+if [ "${TEMPLATE_STORAGE_PROVIDER:-cos}" = "cos" ]; then
+    echo "   Tencent COS: ${TENCENT_COS_BUCKET}/${TENCENT_COS_PROJECT_PREFIX:-calendar}/${TENCENT_COS_ENV_PREFIX:-prod}/${TENCENT_COS_BASE_PATH:-uploads/}"
+else
+    echo "   Local volume: /app/data/templates（volume: sites-auth-data-prod）"
+fi
 echo ""
 echo -e "${YELLOW}🌐 访问地址：${NC}"
 echo "   http://YOUR_SERVER_IP:${SITES_PORT:-3000}"

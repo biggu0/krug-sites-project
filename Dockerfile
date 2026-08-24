@@ -23,6 +23,10 @@ ENV PORT=3000
 ENV HOST=0.0.0.0
 ENV AUTH_DB_PATH=/app/data/auth-db.json
 ENV AUTH_COOKIE_SECURE=false
+ENV TEMPLATE_STORAGE_PROVIDER=cos
+ENV TEMPLATE_STORAGE_DIR=/app/data/templates
+ENV TENCENT_COS_BASE_PATH=uploads/
+ENV TENCENT_COS_PROJECT_PREFIX=calendar
 
 # 复制运行所需文件：构建产物 + 依赖 + package.json（提供 start 脚本）
 COPY --from=builder /app/dist ./dist

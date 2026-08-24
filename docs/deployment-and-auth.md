@@ -18,6 +18,23 @@
 - `drizzle/0000_auth.sql`：OpenAI Sites/Cloudflare 部署时使用的数据库迁移。
 - `db/schema.sql`：数据库结构参考。
 
+## admin 创建后如何登录
+
+首次打开系统时，如果账号库里还没有用户，页面标题会显示“创建管理员账号”。这一步提交后会自动创建 `admin` 并写入登录 cookie。
+
+如果创建后又回到“登录系统”页面，直接使用刚创建的用户名和密码登录：
+
+```text
+用户名：admin
+密码：创建管理员时输入的密码
+```
+
+如果登录后还是停留在登录页，优先检查这几项：
+
+- 服务器是否已经部署最新代码，旧版本曾经会因为 cookie `Secure` 配置导致 HTTP 站点无法保存登录状态。
+- 本地和 Docker 环境里 `AUTH_COOKIE_SECURE` 应该是 `"false"`；如果站点已经通过 HTTPS 访问，可以改为 `"true"`。
+- 账号数据 volume 是否被清空。如果 `auth-db.json` 丢失，系统会重新进入“创建管理员账号”流程。
+
 ## 数据库技术
 
 托管环境使用 **Cloudflare D1**。D1 是 Cloudflare Workers 上的 SQLite 兼容数据库，适合保存结构化数据，比如用户、权限、session。
@@ -36,6 +53,63 @@ sites-auth-data-prod:/app/data
 
 因此容器重建不会丢账号；只有手动删除 Docker volume 才会清空账号数据。
 
+## 模板维护与 COS 存储
+
+模板维护已经从页面本地存储抽成服务端接口：
+
+- `GET /api/templates`：读取模板列表。
+- `POST /api/templates`：上传 PDF 模板。
+- `PATCH /api/templates/:id`：更新模板名称、定制区域、单双面、奇偶页、旋转等参数。
+- `DELETE /api/templates/:id`：删除模板。
+- `GET /api/templates/:id/file`：读取模板 PDF。
+- `POST /api/templates/:id/foreground`：上传前景保护 PDF。
+- `GET /api/templates/:id/foreground`：读取前景保护 PDF。
+
+模板文件统一写入腾讯云 COS。本地只保留为兜底 provider，不再作为默认模板存储。
+
+```text
+TEMPLATE_STORAGE_PROVIDER=cos
+TENCENT_COS_SECRET_ID=
+TENCENT_COS_SECRET_KEY=
+TENCENT_COS_REGION=ap-guangzhou
+TENCENT_COS_BUCKET=krug-product-cos-1382434240
+TENCENT_COS_BASE_PATH=uploads/
+TENCENT_COS_PROJECT_PREFIX=calendar
+```
+
+本地环境使用：
+
+```text
+TENCENT_COS_ENV_PREFIX=test
+```
+
+线上环境使用：
+
+```text
+TENCENT_COS_ENV_PREFIX=prod
+```
+
+配置含义参考 `krug-management` 的 `tencent.cos.*`。密钥只放在服务器或本机 `.env`，不要提交到代码仓库。
+
+兼容旧变量名：`COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_REGION`、`COS_BUCKET`、`COS_PREFIX`、`COS_ENV_PREFIX`、`COS_PROJECT_PREFIX`、`COS_CDN_DOMAIN`。
+
+COS 模式下：
+
+- 模板 PDF 写入 `PROJECT_PREFIX/ENV_PREFIX/BASE_PATH/{templateId}/{fileName}`，默认路径类似 `calendar/test/uploads/{templateId}/{fileName}`。
+- 前景保护 PDF 写入同一个模板目录。
+- 模板索引写入 `PROJECT_PREFIX/ENV_PREFIX/BASE_PATH/templates.json`。
+- 删除模板时会删除 COS 文件对象并更新索引。
+- 前端仍通过 `/api/templates/:id/file` 和 `/api/templates/:id/foreground` 读取，密钥不会暴露给浏览器。
+
+本地用 Worker 运行时：
+
+```bash
+npm run build
+npm run start:worker
+```
+
+`start:worker` 会读取本机 `.env`，生成 `dist/server/wrangler.local.json`，再把 COS 配置注入 Wrangler 的 `vars`。原因是 `dist/server/wrangler.json` 是构建产物，默认 `vars` 为空；只在外层 shell 加 env 时，Worker 运行时不一定能读到这些配置。
+
 
 ## 当前部署方式
 
@@ -47,6 +121,8 @@ sites-auth-data-prod:/app/data
 cd /root/opt/krug-sites-project
 ./server-deploy.sh
 ```
+
+部署脚本会读取项目目录下的 `.env`。生产脚本会强制模板前缀为 `calendar/prod/uploads/`，本地 `start:worker` 默认使用 `calendar/test/uploads/`。
 
 部署脚本会：
 
