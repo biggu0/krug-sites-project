@@ -21,10 +21,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
+ENV WRANGLER_SEND_METRICS=false
 
 # 复制运行所需文件：构建产物 + 依赖 + package.json（提供 start 脚本）
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder /app/db ./db
+COPY --from=builder /app/.openai ./.openai
 COPY package.json ./
 
 EXPOSE 3000

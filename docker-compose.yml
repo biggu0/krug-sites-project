@@ -16,9 +16,15 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
+      WRANGLER_SEND_METRICS: "false"
+    volumes:
+      - sites-d1-data:/app/.wrangler/state
     restart: unless-stopped
     networks:
       - sites-network
+
+volumes:
+  sites-d1-data:
 
 networks:
   sites-network:

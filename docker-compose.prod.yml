@@ -17,6 +17,9 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
+      WRANGLER_SEND_METRICS: "false"
+    volumes:
+      - sites-d1-data-prod:/app/.wrangler/state
     networks:
       - sites-network-prod
     healthcheck:
@@ -38,6 +41,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  sites-d1-data-prod:
 
 networks:
   sites-network-prod:
