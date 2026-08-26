@@ -63,6 +63,28 @@ if [ -f ".env" ]; then
     set +a
 fi
 
+if [ -z "${TENCENT_COS_SECRET_ID:-}" ] && [ -n "${COS_SECRET_ID:-}" ]; then
+    export TENCENT_COS_SECRET_ID="$COS_SECRET_ID"
+fi
+if [ -z "${TENCENT_COS_SECRET_KEY:-}" ] && [ -n "${COS_SECRET_KEY:-}" ]; then
+    export TENCENT_COS_SECRET_KEY="$COS_SECRET_KEY"
+fi
+if [ -z "${TENCENT_COS_REGION:-}" ] && [ -n "${COS_REGION:-}" ]; then
+    export TENCENT_COS_REGION="$COS_REGION"
+fi
+if [ -z "${TENCENT_COS_BUCKET:-}" ] && [ -n "${COS_BUCKET:-}" ]; then
+    export TENCENT_COS_BUCKET="$COS_BUCKET"
+fi
+if [ -z "${TENCENT_COS_BASE_PATH:-}" ] && [ -n "${COS_PREFIX:-}" ]; then
+    export TENCENT_COS_BASE_PATH="$COS_PREFIX"
+fi
+if [ -z "${TENCENT_COS_PROJECT_PREFIX:-}" ] && [ -n "${COS_PROJECT_PREFIX:-}" ]; then
+    export TENCENT_COS_PROJECT_PREFIX="$COS_PROJECT_PREFIX"
+fi
+if [ -z "${TENCENT_COS_CDN_DOMAIN:-}" ] && [ -n "${COS_CDN_DOMAIN:-}" ]; then
+    export TENCENT_COS_CDN_DOMAIN="$COS_CDN_DOMAIN"
+fi
+
 cecho "${GREEN}✅ 源码检查通过${NC}"
 cecho "${GREEN}✅ 数据库配置检查通过${NC}"
 echo ""
