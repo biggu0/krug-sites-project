@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 const sourceConfigPath = resolve('dist/server/wrangler.json');
 const runtimeConfigPath = resolve('dist/server/wrangler.local.json');
 const envPath = resolve('.env');
+const defaultPersistPath = resolve('.wrangler/state-worker-test');
 
 const workerEnvKeys = [
   'AUTH_COOKIE_SECURE',
@@ -147,7 +148,7 @@ const args = [
   '--show-interactive-dev-session',
   'false'
 ];
-if (process.env.WRANGLER_PERSIST_TO) args.push('--persist-to', process.env.WRANGLER_PERSIST_TO);
+args.push('--persist-to', process.env.WRANGLER_PERSIST_TO || defaultPersistPath);
 
 const wrangler = spawn(
   'wrangler',
