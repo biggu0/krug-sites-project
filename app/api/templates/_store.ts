@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { requirePermission } from '../_auth';
+import { initializeAuth, requirePermission } from '../_auth';
 
 export type PageMode='all'|'odd'|'even';
 export type TemplateMetadata={
@@ -22,12 +22,14 @@ export type TemplateMetadata={
   updatedAt:number;
 };
 
-type TemplateIndex={templates:TemplateMetadata[]};
 type CosConfig={secretId:string;secretKey:string;region:string;bucket:string;cdnDomain?:string};
+type TemplateRow={id:string;normalized_name:string;name:string;file_name:string;object_key:string;foreground_file_name?:string|null;foreground_object_key?:string|null;regions?:string|null;has_cover?:number|null;page_count?:number|null;page_mode?:PageMode|null;duplex?:number|null;rotate_cover?:number|null;rotate_inner?:number|null;created_at:number;updated_at:number};
+type TemplateDb={prepare:(sql:string)=>{bind:(...values:unknown[])=>TemplateDbStatement;run:()=>Promise<unknown>;first:<T=unknown>()=>Promise<T|undefined>;all:<T=unknown>()=>Promise<{results:T[]}>}};
+type TemplateDbStatement={bind:(...values:unknown[])=>TemplateDbStatement;run:()=>Promise<unknown>;first:<T=unknown>()=>Promise<T|undefined>;all:<T=unknown>()=>Promise<{results:T[]}>};
 
 const storageRoot=process.env.TEMPLATE_STORAGE_DIR??'./.data/templates';
-const localIndexPath=path.join(storageRoot,'templates.json');
 const encoder=new TextEncoder();
+const maxTemplateBytes=Number(process.env.TEMPLATE_MAX_BYTES??50*1024*1024);
 
 function hex(bytes:ArrayBuffer|Uint8Array){
   return Array.from(new Uint8Array(bytes)).map(value=>value.toString(16).padStart(2,'0')).join('');
@@ -50,6 +52,10 @@ function cleanName(value:string){
   return value.replace(/[\\/:*?"<>|]/g,'-').trim()||'template';
 }
 
+function normalizedName(value:string){
+  return cleanName(value).replace(/\.pdf$/i,'').trim().toLowerCase();
+}
+
 function pdfFileName(value:string){
   const name=cleanName(value);
   return /\.pdf$/i.test(name)?name:`${name}.pdf`;
@@ -69,6 +75,97 @@ function objectPrefix(){
 
 function objectKey(relativeKey:string){
   return `${objectPrefix()}${relativeKey.replace(/^\/+/,'')}`;
+}
+
+async function templateDb():Promise<TemplateDb>{
+  const db=await initializeAuth() as unknown as TemplateDb;
+  await db.prepare('CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, normalized_name TEXT NOT NULL UNIQUE, name TEXT NOT NULL, file_name TEXT NOT NULL, object_key TEXT NOT NULL, foreground_file_name TEXT, foreground_object_key TEXT, regions TEXT, has_cover INTEGER, page_count INTEGER, page_mode TEXT, duplex INTEGER, rotate_cover INTEGER, rotate_inner INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS templates_updated_idx ON templates(updated_at)').run();
+  return db;
+}
+
+function rowToTemplate(row:TemplateRow):TemplateMetadata{
+  return{
+    id:row.id,
+    name:row.name,
+    fileName:row.file_name,
+    objectKey:row.object_key,
+    foregroundFileName:row.foreground_file_name??undefined,
+    foregroundObjectKey:row.foreground_object_key??undefined,
+    regions:row.regions?JSON.parse(row.regions):undefined,
+    hasCover:row.has_cover===null||row.has_cover===undefined?undefined:Boolean(row.has_cover),
+    pageCount:row.page_count??undefined,
+    pageMode:row.page_mode??undefined,
+    duplex:row.duplex===null||row.duplex===undefined?undefined:Boolean(row.duplex),
+    rotateCover:row.rotate_cover===null||row.rotate_cover===undefined?undefined:Boolean(row.rotate_cover),
+    rotateInner:row.rotate_inner===null||row.rotate_inner===undefined?undefined:Boolean(row.rotate_inner),
+    createdAt:row.created_at,
+    updatedAt:row.updated_at
+  };
+}
+
+function booleanValue(value:unknown){
+  return typeof value==='boolean'?value:undefined;
+}
+
+function pageModeValue(value:unknown):PageMode|undefined{
+  return value==='all'||value==='odd'||value==='even'?value:undefined;
+}
+
+function assertRegionPoint(value:unknown){
+  const point=value as {x?:unknown;y?:unknown;inX?:unknown;inY?:unknown;outX?:unknown;outY?:unknown};
+  for(const key of ['x','y','inX','inY','outX','outY'] as const){
+    if(point[key]!==undefined&&(typeof point[key]!=='number'||!Number.isFinite(point[key])))throw new Error('模板区域坐标格式不正确');
+  }
+}
+
+function cleanRegions(value:unknown){
+  if(value===undefined)return undefined;
+  const regions=value as {cover?:{points?:unknown[]};inner?:{points?:unknown[]}};
+  if(!regions||typeof regions!=='object')throw new Error('模板区域参数格式不正确');
+  for(const key of ['cover','inner'] as const){
+    const region=regions[key];
+    if(!region||typeof region!=='object'||!Array.isArray(region.points)||region.points.length<3)throw new Error(`${key==='cover'?'封面':'内页'}定制区域至少需要3个坐标点`);
+    region.points.forEach(assertRegionPoint);
+  }
+  return value;
+}
+
+async function pdfPageCount(file:File){
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  const header=new TextDecoder().decode(bytes.slice(0,5));
+  if(header!=='%PDF-')throw new Error('上传文件不是有效 PDF');
+  const pdf=await import('pdf-lib');
+  return pdf.PDFDocument.load(bytes).then(document=>document.getPageCount());
+}
+
+async function validatePdfFile(file:File,kind:'template'|'foreground'){
+  if(file.size<=0)throw new Error('PDF 文件为空');
+  if(file.size>maxTemplateBytes)throw new Error(`PDF 文件不能超过 ${Math.round(maxTemplateBytes/1024/1024)}MB`);
+  if(!/\.pdf$/i.test(file.name))throw new Error('模板文件扩展名必须是 .pdf');
+  if(file.type&&file.type!=='application/pdf')throw new Error('模板文件 MIME 类型必须是 application/pdf');
+  const pageCount=await pdfPageCount(file);
+  if(kind==='template'&&![12,13,24,25].includes(pageCount))throw new Error(`模板必须是12、13、24或25页，实际为 ${pageCount} 页`);
+  return pageCount;
+}
+
+function cleanMetadata(metadata:Partial<TemplateMetadata>,actualPageCount:number){
+  const pageCount=metadata.pageCount===undefined?actualPageCount:Number(metadata.pageCount);
+  if(pageCount!==actualPageCount)throw new Error(`模板参数页数 ${pageCount} 与 PDF 实际页数 ${actualPageCount} 不一致`);
+  if(![12,13,24,25].includes(pageCount))throw new Error(`模板页数不受支持：${pageCount}`);
+  const duplex=booleanValue(metadata.duplex)??[24,25].includes(pageCount),pageMode=pageModeValue(metadata.pageMode)??(duplex?'odd':'all');
+  if(duplex&&pageMode==='all')throw new Error('双面印刷必须选择仅奇数页或仅偶数页插图');
+  if(duplex&&![24,25].includes(pageCount))throw new Error('双面印刷模板必须是24页或25页');
+  if(!duplex&&![12,13].includes(pageCount))throw new Error('单面印刷模板必须是12页或13页');
+  return{
+    regions:cleanRegions(metadata.regions),
+    hasCover:booleanValue(metadata.hasCover)??true,
+    pageCount,
+    pageMode,
+    duplex,
+    rotateCover:booleanValue(metadata.rotateCover)??false,
+    rotateInner:booleanValue(metadata.rotateInner)??false
+  };
 }
 
 function cosConfig():CosConfig{
@@ -199,35 +296,6 @@ function localStorageError(error:unknown,context:string){
   return new Error(`${context}。原始错误：${message}`);
 }
 
-async function readIndex():Promise<TemplateIndex>{
-  try{
-    const content=templateStorageProvider()==='cos'?await cosGet('templates.json'):await readFile(localIndexPath);
-    return JSON.parse(content.toString('utf8')) as TemplateIndex;
-  }catch(error){
-    if(templateStorageProvider()==='cos'&&!isMissingCosIndex(error))throw error;
-    return{templates:[]};
-  }
-}
-
-function isMissingCosIndex(error:unknown){
-  const value=error as {statusCode?:number;code?:string;error?:{Code?:string};message?:string};
-  return value.statusCode===404||value.code==='NoSuchKey'||value.error?.Code==='NoSuchKey'||/NoSuchKey|not exist|specified key does not exist/i.test(value.message??'');
-}
-
-async function writeIndex(index:TemplateIndex){
-  const body=Buffer.from(JSON.stringify(index,null,2));
-  if(templateStorageProvider()==='cos'){
-    await cosPut('templates.json',body,'application/json');
-    return;
-  }
-  try{
-    await mkdir(storageRoot,{recursive:true});
-    await writeFile(localIndexPath,body);
-  }catch(error){
-    throw localStorageError(error,`本地模板索引写入失败：${localIndexPath}`);
-  }
-}
-
 function localPath(relativeKey:string){
   return path.join(storageRoot,relativeKey);
 }
@@ -272,13 +340,13 @@ async function deleteTemplateObjects(template:TemplateMetadata){
 }
 
 export async function listTemplates(){
-  const index=await readIndex();
-  return index.templates.sort((a,b)=>b.updatedAt-a.updatedAt);
+  const db=await templateDb(),rows=await db.prepare('SELECT * FROM templates ORDER BY updated_at DESC').all<TemplateRow>();
+  return rows.results.map(rowToTemplate);
 }
 
 export async function getTemplate(id:string){
-  const index=await readIndex();
-  return index.templates.find(template=>template.id===id);
+  const db=await templateDb(),row=await db.prepare('SELECT * FROM templates WHERE id=?').bind(id).first<TemplateRow>();
+  return row?rowToTemplate(row):undefined;
 }
 
 export async function readTemplateFile(id:string,kind:'file'|'foreground'){
@@ -290,90 +358,123 @@ export async function readTemplateFile(id:string,kind:'file'|'foreground'){
 }
 
 export async function createTemplate(input:{name:string;file:File;metadata?:Partial<TemplateMetadata>;foregroundFile?:File}){
-  const now=Date.now(),id=newTemplateId(),fileName=pdfFileName(input.file.name||input.name),objectKey=`${id}/${fileName}`;
+  const actualPageCount=await validatePdfFile(input.file,'template'),metadata=cleanMetadata(input.metadata??{},actualPageCount);
+  const now=Date.now(),id=newTemplateId(),name=cleanName(input.name||input.file.name.replace(/\.pdf$/i,'')),normalized=normalizedName(name),fileName=pdfFileName(input.file.name||name),objectKey=`${id}/${fileName}`,db=await templateDb();
+  if(await db.prepare('SELECT id FROM templates WHERE normalized_name=? AND id<>?').bind(normalized,id).first())throw new Error(`模板名称“${name.replace(/\.pdf$/i,'')}”已存在，请使用其他名称`);
   await writeObject(objectKey,input.file);
 
   let foregroundFileName: string|undefined;
   let foregroundObjectKey: string|undefined;
   if(input.foregroundFile){
+    const foregroundPageCount=await validatePdfFile(input.foregroundFile,'foreground');
+    if(foregroundPageCount!==actualPageCount)throw new Error(`前景保护层页数 ${foregroundPageCount} 与背景模板 ${actualPageCount} 不一致`);
     foregroundFileName=pdfFileName(input.foregroundFile.name||`${input.name}-foreground.pdf`);
     foregroundObjectKey=`${id}/${foregroundFileName}`;
     await writeObject(foregroundObjectKey,input.foregroundFile);
   }
 
-  const index=await readIndex();
   const template:TemplateMetadata={
     id,
-    name:cleanName(input.name||fileName.replace(/\.pdf$/i,'')),
+    name,
     fileName,
     objectKey,
     foregroundFileName,
     foregroundObjectKey,
-    regions:input.metadata?.regions,
-    hasCover:input.metadata?.hasCover,
-    pageCount:input.metadata?.pageCount,
-    pageMode:input.metadata?.pageMode,
-    duplex:input.metadata?.duplex,
-    rotateCover:input.metadata?.rotateCover,
-    rotateInner:input.metadata?.rotateInner,
+    regions:metadata.regions,
+    hasCover:metadata.hasCover,
+    pageCount:metadata.pageCount,
+    pageMode:metadata.pageMode,
+    duplex:metadata.duplex,
+    rotateCover:metadata.rotateCover,
+    rotateInner:metadata.rotateInner,
     createdAt:now,
     updatedAt:now
   };
-  index.templates.push(template);
-  await writeIndex(index);
+  try{
+    await db.prepare('INSERT INTO templates(id,normalized_name,name,file_name,object_key,foreground_file_name,foreground_object_key,regions,has_cover,page_count,page_mode,duplex,rotate_cover,rotate_inner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(
+      id,normalized,name,fileName,objectKey,foregroundFileName,foregroundObjectKey,metadata.regions?JSON.stringify(metadata.regions):undefined,metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,now,now
+    ).run();
+  }catch(error){
+    await deleteTemplateObjects(template).catch(()=>undefined);
+    if(/UNIQUE|unique/i.test(error instanceof Error?error.message:String(error)))throw new Error(`模板名称“${name.replace(/\.pdf$/i,'')}”已存在，请使用其他名称`);
+    throw error;
+  }
   return template;
 }
 
 export async function updateTemplate(id:string,patch:Partial<TemplateMetadata>){
-  const index=await readIndex(),template=index.templates.find(item=>item.id===id);
+  const db=await templateDb(),template=await getTemplate(id);
   if(!template)throw new Error('模板不存在');
-  Object.assign(template,{
-    name:patch.name===undefined?template.name:cleanName(patch.name),
+  const name=patch.name===undefined?template.name:cleanName(patch.name),normalized=normalizedName(name);
+  if(await db.prepare('SELECT id FROM templates WHERE normalized_name=? AND id<>?').bind(normalized,id).first())throw new Error(`模板名称“${name.replace(/\.pdf$/i,'')}”已存在，请使用其他名称`);
+  const pageCount=patch.pageCount===undefined?template.pageCount:Number(patch.pageCount);
+  if(!pageCount||![12,13,24,25].includes(pageCount))throw new Error(`模板页数不受支持：${pageCount}`);
+  const metadata=cleanMetadata({
     regions:patch.regions===undefined?template.regions:patch.regions,
     hasCover:patch.hasCover===undefined?template.hasCover:patch.hasCover,
-    pageCount:patch.pageCount===undefined?template.pageCount:patch.pageCount,
+    pageCount,
     pageMode:patch.pageMode===undefined?template.pageMode:patch.pageMode,
     duplex:patch.duplex===undefined?template.duplex:patch.duplex,
     rotateCover:patch.rotateCover===undefined?template.rotateCover:patch.rotateCover,
-    rotateInner:patch.rotateInner===undefined?template.rotateInner:patch.rotateInner,
-    updatedAt:Date.now()
+    rotateInner:patch.rotateInner===undefined?template.rotateInner:patch.rotateInner
+  },pageCount);
+  const updatedAt=Date.now();
+  Object.assign(template,{
+    name,
+    regions:metadata.regions,
+    hasCover:metadata.hasCover,
+    pageCount:metadata.pageCount,
+    pageMode:metadata.pageMode,
+    duplex:metadata.duplex,
+    rotateCover:metadata.rotateCover,
+    rotateInner:metadata.rotateInner,
+    updatedAt
   });
-  await writeIndex(index);
+  await db.prepare('UPDATE templates SET normalized_name=?, name=?, regions=?, has_cover=?, page_count=?, page_mode=?, duplex=?, rotate_cover=?, rotate_inner=?, foreground_file_name=?, foreground_object_key=?, updated_at=? WHERE id=?').bind(
+    normalized,name,metadata.regions?JSON.stringify(metadata.regions):undefined,metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,template.foregroundFileName,template.foregroundObjectKey,updatedAt,id
+  ).run();
   return template;
 }
 
 export async function updateTemplateForeground(id:string,file:File){
-  const index=await readIndex(),template=index.templates.find(item=>item.id===id);
+  const db=await templateDb(),template=await getTemplate(id);
   if(!template)throw new Error('模板不存在');
+  const pageCount=await validatePdfFile(file,'foreground');
+  if(template.pageCount&&pageCount!==template.pageCount)throw new Error(`前景保护层页数 ${pageCount} 与背景模板 ${template.pageCount} 不一致`);
   const foregroundFileName=pdfFileName(file.name||`${template.name}-foreground.pdf`),foregroundObjectKey=`${id}/${foregroundFileName}`;
   if(template.foregroundObjectKey&&template.foregroundObjectKey!==foregroundObjectKey)await deleteObjectIfExists(template.foregroundObjectKey);
   await writeObject(foregroundObjectKey,file);
   template.foregroundFileName=foregroundFileName;
   template.foregroundObjectKey=foregroundObjectKey;
   template.updatedAt=Date.now();
-  await writeIndex(index);
+  await db.prepare('UPDATE templates SET foreground_file_name=?, foreground_object_key=?, updated_at=? WHERE id=?').bind(foregroundFileName,foregroundObjectKey,template.updatedAt,id).run();
   return template;
 }
 
 export async function deleteTemplate(id:string){
-  const index=await readIndex(),template=index.templates.find(item=>item.id===id);
+  const db=await templateDb(),template=await getTemplate(id);
   if(!template)throw new Error('模板不存在');
   await deleteTemplateObjects(template);
-  await writeIndex({templates:index.templates.filter(item=>item.id!==id)});
+  await db.prepare('DELETE FROM templates WHERE id=?').bind(id).run();
 }
 
 export function publicTemplate(template:TemplateMetadata){
   return{
-    ...template,
+    id:template.id,
+    name:template.name,
+    fileName:template.fileName,
+    foregroundFileName:template.foregroundFileName,
+    regions:template.regions,
+    hasCover:template.hasCover,
+    pageCount:template.pageCount,
+    pageMode:template.pageMode,
+    duplex:template.duplex,
+    rotateCover:template.rotateCover,
+    rotateInner:template.rotateInner,
+    createdAt:template.createdAt,
+    updatedAt:template.updatedAt,
     storageProvider:templateStorageProvider(),
-    storageUrl:templateStorageProvider()==='cos'?cosPublicUrl(template.objectKey):undefined,
     fileUrl:`/api/templates/${template.id}/file`,
     foregroundUrl:template.foregroundObjectKey?`/api/templates/${template.id}/foreground`:undefined
   };
-}
-
-function cosPublicUrl(relativeKey:string){
-  if(templateStorageProvider()!=='cos')return undefined;
-  const config=cosConfig(),base=config.cdnDomain?`https://${config.cdnDomain.replace(/^https?:\/\//,'').replace(/\/+$/,'')}`:`https://${config.bucket}.cos.${config.region}.myqcloud.com`;
-  return `${base}/${objectKey(relativeKey).split('/').map(encodeURIComponent).join('/')}`;
 }

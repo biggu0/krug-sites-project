@@ -3,7 +3,8 @@ export type SessionUser={id:number;username:string;permissions:Permission[]};
 
 type UserRow={id:number;username:string;password_hash:string;salt:string;permissions:string;active:number;created_at:number};
 type SessionRow={token_hash:string;user_id:number;expires_at:number;created_at:number};
-type LocalState={nextUserId:number;users:UserRow[];sessions:SessionRow[]};
+type TemplateRow={id:string;normalized_name:string;name:string;file_name:string;object_key:string;foreground_file_name?:string|null;foreground_object_key?:string|null;regions?:string|null;has_cover?:number|null;page_count?:number|null;page_mode?:string|null;duplex?:number|null;rotate_cover?:number|null;rotate_inner?:number|null;created_at:number;updated_at:number};
+type LocalState={nextUserId:number;users:UserRow[];sessions:SessionRow[];templates:TemplateRow[]};
 type QueryResult<T=unknown>={results:T[]};
 type AuthStatement={bind:(...values:unknown[])=>AuthStatement;run:()=>Promise<{meta:{last_row_id?:number}}>;first:<T=unknown>()=>Promise<T|undefined>;all:<T=unknown>()=>Promise<QueryResult<T>>};
 type AuthDb={prepare:(sql:string)=>AuthStatement;batch:(statements:AuthStatement[])=>Promise<unknown[]>};
@@ -29,7 +30,7 @@ async function localDatabase():Promise<AuthDb>{
   localDbPromise=(async()=>{
     const fs=await import('node:fs/promises'),path=await import('node:path');
     const filePath=process.env.AUTH_DB_PATH??'./.data/auth-db.json';
-    async function read():Promise<LocalState>{try{return JSON.parse(await fs.readFile(filePath,'utf8')) as LocalState;}catch{return{nextUserId:1,users:[],sessions:[]};}}
+    async function read():Promise<LocalState>{try{const state=JSON.parse(await fs.readFile(filePath,'utf8')) as Partial<LocalState>;return{nextUserId:state.nextUserId??1,users:state.users??[],sessions:state.sessions??[],templates:state.templates??[]};}catch{return{nextUserId:1,users:[],sessions:[],templates:[]};}}
     async function write(state:LocalState){await fs.mkdir(path.dirname(filePath),{recursive:true});await fs.writeFile(filePath,JSON.stringify(state,null,2));}
     function statement(sql:string):AuthStatement{
       let values:unknown[]=[];
@@ -66,6 +67,25 @@ async function localDatabase():Promise<AuthDb>{
             const userId=Number(values[0]),keepUserId=Number(values[1]);
             state.sessions=state.sessions.filter(session=>!(session.user_id===userId&&session.user_id!==keepUserId));
             dirty=true;
+          }else if(normalized.startsWith('INSERT INTO TEMPLATES')){
+            const row:TemplateRow={id:String(values[0]),normalized_name:String(values[1]),name:String(values[2]),file_name:String(values[3]),object_key:String(values[4]),foreground_file_name:values[5]===undefined?null:String(values[5]),foreground_object_key:values[6]===undefined?null:String(values[6]),regions:values[7]===undefined?null:String(values[7]),has_cover:values[8]===undefined||values[8]===null?null:Number(values[8]),page_count:values[9]===undefined||values[9]===null?null:Number(values[9]),page_mode:values[10]===undefined||values[10]===null?null:String(values[10]),duplex:values[11]===undefined||values[11]===null?null:Number(values[11]),rotate_cover:values[12]===undefined||values[12]===null?null:Number(values[12]),rotate_inner:values[13]===undefined||values[13]===null?null:Number(values[13]),created_at:Number(values[14]),updated_at:Number(values[15])};
+            if(state.templates.some(template=>template.normalized_name===row.normalized_name))throw new Error('UNIQUE constraint failed: templates.normalized_name');
+            state.templates.push(row);
+            dirty=true;
+          }else if(normalized.startsWith('UPDATE TEMPLATES SET NORMALIZED_NAME=')){
+            const id=String(values[12]),template=state.templates.find(item=>item.id===id);
+            if(template){
+              const normalizedName=String(values[0]);
+              if(state.templates.some(item=>item.id!==id&&item.normalized_name===normalizedName))throw new Error('UNIQUE constraint failed: templates.normalized_name');
+              Object.assign(template,{normalized_name:normalizedName,name:String(values[1]),regions:values[2]===undefined||values[2]===null?null:String(values[2]),has_cover:values[3]===undefined||values[3]===null?null:Number(values[3]),page_count:values[4]===undefined||values[4]===null?null:Number(values[4]),page_mode:values[5]===undefined||values[5]===null?null:String(values[5]),duplex:values[6]===undefined||values[6]===null?null:Number(values[6]),rotate_cover:values[7]===undefined||values[7]===null?null:Number(values[7]),rotate_inner:values[8]===undefined||values[8]===null?null:Number(values[8]),foreground_file_name:values[9]===undefined?template.foreground_file_name:String(values[9]),foreground_object_key:values[10]===undefined?template.foreground_object_key:String(values[10]),updated_at:Number(values[11])});
+              dirty=true;
+            }
+          }else if(normalized.startsWith('UPDATE TEMPLATES SET FOREGROUND_FILE_NAME=')){
+            const id=String(values[3]),template=state.templates.find(item=>item.id===id);
+            if(template){template.foreground_file_name=values[0]===undefined?null:String(values[0]);template.foreground_object_key=values[1]===undefined?null:String(values[1]);template.updated_at=Number(values[2]);dirty=true;}
+          }else if(normalized.startsWith('DELETE FROM TEMPLATES WHERE ID=')){
+            state.templates=state.templates.filter(template=>template.id!==String(values[0]));
+            dirty=true;
           }
           if(dirty)await write(state);
           return{meta:{last_row_id:lastRowId}};
@@ -82,11 +102,17 @@ async function localDatabase():Promise<AuthDb>{
             const user=session?state.users.find(item=>item.id===session.user_id&&item.active===1):undefined;
             return user?{id:user.id,username:user.username,permissions:user.permissions} as T:undefined;
           }
+          if(normalized.startsWith('SELECT * FROM TEMPLATES WHERE ID='))return state.templates.find(item=>item.id===String(values[0])) as T|undefined;
+          if(normalized.startsWith('SELECT ID FROM TEMPLATES WHERE NORMALIZED_NAME=')){
+            const name=String(values[0]),exclude=values[1]===undefined?undefined:String(values[1]);
+            return state.templates.find(item=>item.normalized_name===name&&item.id!==exclude) as T|undefined;
+          }
           return undefined;
         },
         async all<T=unknown>(){
           const state=await read();
           if(normalized.startsWith('SELECT ID,USERNAME,PERMISSIONS,ACTIVE,CREATED_AT FROM USERS ORDER BY ID'))return{results:[...state.users].sort((a,b)=>a.id-b.id).map(({id,username,permissions,active,created_at})=>({id,username,permissions,active,created_at})) as T[]};
+          if(normalized.startsWith('SELECT * FROM TEMPLATES ORDER BY UPDATED_AT DESC'))return{results:[...state.templates].sort((a,b)=>b.updated_at-a.updated_at) as T[]};
           return{results:[]};
         }
       };
@@ -99,8 +125,10 @@ async function localDatabase():Promise<AuthDb>{
 export async function initializeAuth(){const db=await database();await db.batch([
   db.prepare('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, salt TEXT NOT NULL, permissions TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)'),
   db.prepare('CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)'),
+  db.prepare('CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, normalized_name TEXT NOT NULL UNIQUE, name TEXT NOT NULL, file_name TEXT NOT NULL, object_key TEXT NOT NULL, foreground_file_name TEXT, foreground_object_key TEXT, regions TEXT, has_cover INTEGER, page_count INTEGER, page_mode TEXT, duplex INTEGER, rotate_cover INTEGER, rotate_inner INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)'),
   db.prepare('CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id)'),
-  db.prepare('CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at)')
+  db.prepare('CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at)'),
+  db.prepare('CREATE INDEX IF NOT EXISTS templates_updated_idx ON templates(updated_at)')
 ]);return db;}
 
 export async function hashPassword(password:string,saltHex?:string){const salt=saltHex?Uint8Array.from(saltHex.match(/.{2}/g)??[],part=>parseInt(part,16)):crypto.getRandomValues(new Uint8Array(16)),key=await crypto.subtle.importKey('raw',encoder.encode(password),'PBKDF2',false,['deriveBits']),bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt,iterations:210000},key,256);return{hash:hex(bits),salt:hex(salt)};}

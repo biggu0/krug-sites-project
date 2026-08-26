@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -95,7 +95,8 @@ function writeRuntimeConfig() {
   assertCosVars(config.vars);
 
   mkdirSync(dirname(runtimeConfigPath), { recursive: true });
-  writeFileSync(runtimeConfigPath, JSON.stringify(config, null, 2));
+  writeFileSync(runtimeConfigPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  chmodSync(runtimeConfigPath, 0o600);
 
   const prefix = [
     config.vars.TENCENT_COS_PROJECT_PREFIX,
@@ -123,6 +124,16 @@ function redactOutput(chunk) {
 
 loadDotEnv();
 writeRuntimeConfig();
+
+function cleanupRuntimeConfig() {
+  try {
+    rmSync(runtimeConfigPath, { force: true });
+  } catch {
+    // Best-effort cleanup only; the file is already written with owner-only permissions.
+  }
+}
+
+process.on('exit', cleanupRuntimeConfig);
 
 const port = process.env.PORT || '3000';
 const args = [
