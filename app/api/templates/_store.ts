@@ -77,6 +77,10 @@ function objectKey(relativeKey:string){
   return `${objectPrefix()}${relativeKey.replace(/^\/+/,'')}`;
 }
 
+function dbValue<T>(value:T|undefined){
+  return value===undefined?null:value;
+}
+
 async function templateDb():Promise<TemplateDb>{
   const db=await initializeAuth() as unknown as TemplateDb;
   await db.prepare('CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, normalized_name TEXT NOT NULL UNIQUE, name TEXT NOT NULL, file_name TEXT NOT NULL, object_key TEXT NOT NULL, foreground_file_name TEXT, foreground_object_key TEXT, regions TEXT, has_cover INTEGER, page_count INTEGER, page_mode TEXT, duplex INTEGER, rotate_cover INTEGER, rotate_inner INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)').run();
@@ -392,7 +396,7 @@ export async function createTemplate(input:{name:string;file:File;metadata?:Part
   };
   try{
     await db.prepare('INSERT INTO templates(id,normalized_name,name,file_name,object_key,foreground_file_name,foreground_object_key,regions,has_cover,page_count,page_mode,duplex,rotate_cover,rotate_inner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(
-      id,normalized,name,fileName,objectKey,foregroundFileName,foregroundObjectKey,metadata.regions?JSON.stringify(metadata.regions):undefined,metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,now,now
+      id,normalized,name,fileName,objectKey,dbValue(foregroundFileName),dbValue(foregroundObjectKey),dbValue(metadata.regions?JSON.stringify(metadata.regions):undefined),metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,now,now
     ).run();
   }catch(error){
     await deleteTemplateObjects(template).catch(()=>undefined);
@@ -431,7 +435,7 @@ export async function updateTemplate(id:string,patch:Partial<TemplateMetadata>){
     updatedAt
   });
   await db.prepare('UPDATE templates SET normalized_name=?, name=?, regions=?, has_cover=?, page_count=?, page_mode=?, duplex=?, rotate_cover=?, rotate_inner=?, foreground_file_name=?, foreground_object_key=?, updated_at=? WHERE id=?').bind(
-    normalized,name,metadata.regions?JSON.stringify(metadata.regions):undefined,metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,template.foregroundFileName,template.foregroundObjectKey,updatedAt,id
+    normalized,name,dbValue(metadata.regions?JSON.stringify(metadata.regions):undefined),metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,dbValue(template.foregroundFileName),dbValue(template.foregroundObjectKey),updatedAt,id
   ).run();
   return template;
 }
