@@ -28,7 +28,7 @@ function cubicSvgPoints(path:SVGPathElement,matrix:DOMMatrix|null){
     if(upper==='Q'||upper==='T'){const ox=x,oy=y,q=upper==='Q'?{x:number()+(relative?ox:0),y:number()+(relative?oy:0)}:lastQuadratic?{x:2*ox-lastQuadratic.x,y:2*oy-lastQuadratic.y}:{x:ox,y:oy},nx=number()+(relative?ox:0),ny=number()+(relative?oy:0),c1={x:ox+(q.x-ox)*2/3,y:oy+(q.y-oy)*2/3},c2={x:nx+(q.x-nx)*2/3,y:ny+(q.y-ny)*2/3};pushCubic(c1.x,c1.y,c2.x,c2.y,nx,ny);lastQuadratic=q;lastCubic=null;continue;}
     throw new Error(`暂不支持 SVG 路径命令 ${command}，请在设计软件中将轮廓转换为贝塞尔路径`);
   }
-  if(points.length>1&&Math.hypot(points.at(-1)!.x-points[0].x,points.at(-1)!.y-points[0].y)<.001)points.pop();
+  if(points.length>1&&Math.hypot(points.at(-1)!.x-points[0].x,points.at(-1)!.y-points[0].y)<.001){const closing=points.pop()!;if(closing.inX!==undefined){points[0].inX=closing.inX;points[0].inY=closing.inY;}}
   return points;
 }
 
