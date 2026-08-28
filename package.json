@@ -6,8 +6,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "set -a; [ -f .env ] && . ./.env; set +a; vinext dev",
-    "build": "node ./scripts/clean-dist.mjs && vinext build",
+    "dev": "node ./scripts/prepare-pdfjs-assets.mjs && set -a; [ -f .env ] && . ./.env; set +a; vinext dev",
+    "build": "node ./scripts/clean-dist.mjs && node ./scripts/prepare-pdfjs-assets.mjs && vinext build",
     "start": "set -a; [ -f .env ] && . ./.env; set +a; vinext start",
     "start:worker": "node ./scripts/start-worker.mjs",
     "sites:package": "npm run build && ./scripts/package-site.sh ./dist/site-package.tar.gz",

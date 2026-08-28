@@ -43,6 +43,12 @@
 
 Cloudflare D1/本地 Worker 对直接绑定 `ArrayBuffer` 的返回形式不稳定，导致上传记录存在但读取结果为空。现在数据库后备存储使用 Base64 文本，并兼容读取 `string`、`ArrayBuffer`、`Uint8Array` 和数字数组；文件接口增加 `Content-Length`，空文件会明确提示删除后重新导入。
 
+### 远端更新后所有模板停在“正在加载”
+
+PDF.js 原本通过 Vite 动态导入，被拆分为 `/_next/static/chunks/pdf-随机哈希.js`。远端更新后，仍在浏览器中的旧页面会继续请求旧哈希，而新 Docker 镜像只保留新哈希文件，最终返回 404；模板 PDF 和 COS 数据本身并未损坏。
+
+现在将 PDF.js 主程序和 Worker 固定发布到带版本号的 `/vendor/pdfjs/` 路径，模板预览不再依赖每次构建都会变化的动态 chunk。生产模式已经验证两个资源均返回 HTTP 200 和正确的 JavaScript 内容类型。
+
 ## 推送前兼容检查
 
 - `cos`：远程已有环境变量时路径不变，仍使用原 COS 对象前缀和权限策略。
