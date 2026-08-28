@@ -77,6 +77,8 @@ TENCENT_COS_BASE_PATH=uploads/
 TENCENT_COS_PROJECT_PREFIX=calendar
 ```
 
+本地 Vinext/Cloudflare 开发环境如果没有设置 COS 变量，会自动使用 `database` 后备存储，避免 Worker 运行时写 `node:fs` 失败。远程已有完整 COS 变量时仍自动使用 COS，无需重新配置；显式设置 `TEMPLATE_STORAGE_PROVIDER` 时始终以该值为准。
+
 本地环境使用：
 
 ```text

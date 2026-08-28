@@ -6,7 +6,7 @@ export async function GET(request:Request,{params}:{params:Promise<{id:string}>}
   try{
     const {id}=await params;
     const bytes=await readTemplateFile(id,'foreground');
-    return new Response(bytes,{headers:{'Content-Type':'application/pdf','Cache-Control':'no-store'}});
+    return new Response(bytes,{headers:{'Content-Type':'application/pdf','Content-Length':String(bytes.byteLength),'Cache-Control':'no-store'}});
   }catch(error){
     return Response.json({error:error instanceof Error?error.message:'前景保护层读取失败'},{status:404});
   }

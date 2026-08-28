@@ -41,11 +41,15 @@ export async function requireTemplatePermission(request:Request){
 
 export function templateStorageUnavailableHint(){
   if(templateStorageProvider()==='local')return '当前模板存储是 local。本地 Node/Docker 可以使用 local；wrangler/Cloudflare Worker 运行时不能写 node:fs，请改用 TEMPLATE_STORAGE_PROVIDER=cos。';
+  if(templateStorageProvider()==='database')return '当前模板存储是本地开发数据库；远程部署检测到已有 COS 配置后会自动继续使用 COS。';
   return '当前模板存储是 cos，请检查 COS 配置、密钥权限和路径策略。';
 }
 
 export function templateStorageProvider(){
-  return (process.env.TEMPLATE_STORAGE_PROVIDER??'cos').toLowerCase();
+  const configured=process.env.TEMPLATE_STORAGE_PROVIDER?.trim().toLowerCase();
+  if(configured)return configured;
+  const hasCosConfig=Boolean((process.env.TENCENT_COS_SECRET_ID??process.env.COS_SECRET_ID)&&(process.env.TENCENT_COS_SECRET_KEY??process.env.COS_SECRET_KEY)&&(process.env.TENCENT_COS_REGION??process.env.COS_REGION)&&(process.env.TENCENT_COS_BUCKET??process.env.COS_BUCKET));
+  return hasCosConfig?'cos':'database';
 }
 
 function cleanName(value:string){
@@ -84,6 +88,7 @@ function dbValue<T>(value:T|undefined){
 async function templateDb():Promise<TemplateDb>{
   const db=await initializeAuth() as unknown as TemplateDb;
   await db.prepare('CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, normalized_name TEXT NOT NULL UNIQUE, name TEXT NOT NULL, file_name TEXT NOT NULL, object_key TEXT NOT NULL, foreground_file_name TEXT, foreground_object_key TEXT, regions TEXT, has_cover INTEGER, page_count INTEGER, page_mode TEXT, duplex INTEGER, rotate_cover INTEGER, rotate_inner INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)').run();
+  await db.prepare('CREATE TABLE IF NOT EXISTS template_objects (object_key TEXT PRIMARY KEY, content_type TEXT NOT NULL, body BLOB NOT NULL, updated_at INTEGER NOT NULL)').run();
   await db.prepare('CREATE INDEX IF NOT EXISTS templates_updated_idx ON templates(updated_at)').run();
   return db;
 }
@@ -305,9 +310,14 @@ function localPath(relativeKey:string){
 }
 
 async function writeObject(relativeKey:string,file:File){
-  const body=Buffer.from(await file.arrayBuffer());
-  if(templateStorageProvider()==='cos'){
+  const arrayBuffer=await file.arrayBuffer(),body=Buffer.from(arrayBuffer),provider=templateStorageProvider();
+  if(provider==='cos'){
     await cosPut(relativeKey,body,file.type||'application/pdf');
+    return;
+  }
+  if(provider==='database'){
+    const db=await templateDb();
+    await db.prepare('INSERT OR REPLACE INTO template_objects(object_key,content_type,body,updated_at) VALUES(?,?,?,?)').bind(relativeKey,file.type||'application/pdf',body.toString('base64'),Date.now()).run();
     return;
   }
   const target=localPath(relativeKey);
@@ -320,24 +330,45 @@ async function writeObject(relativeKey:string,file:File){
 }
 
 async function readObject(relativeKey:string){
-  return templateStorageProvider()==='cos'?cosGet(relativeKey):readFile(localPath(relativeKey));
+  const provider=templateStorageProvider();
+  if(provider==='cos')return cosGet(relativeKey);
+  if(provider==='database'){
+    const db=await templateDb(),row=await db.prepare('SELECT body FROM template_objects WHERE object_key=?').bind(relativeKey).first<{body:string|ArrayBuffer|Uint8Array|number[]}>();
+    if(!row?.body)throw new Error('模板文件不存在');
+    const bytes=typeof row.body==='string'?Buffer.from(row.body,'base64'):row.body instanceof ArrayBuffer?Buffer.from(row.body):ArrayBuffer.isView(row.body)?Buffer.from(row.body.buffer,row.body.byteOffset,row.body.byteLength):Array.isArray(row.body)?Buffer.from(row.body):Buffer.alloc(0);
+    if(!bytes.length)throw new Error('模板文件内容为空，请删除该模板后重新导入');
+    return bytes;
+  }
+  return readFile(localPath(relativeKey));
 }
 
 async function deleteObjectIfExists(relativeKey:string){
-  if(templateStorageProvider()==='cos'){
+  const provider=templateStorageProvider();
+  if(provider==='cos'){
     await cosDelete(relativeKey).catch(()=>undefined);
+    return;
+  }
+  if(provider==='database'){
+    const db=await templateDb();
+    await db.prepare('DELETE FROM template_objects WHERE object_key=?').bind(relativeKey).run();
     return;
   }
   await rm(localPath(relativeKey),{force:true});
 }
 
 async function deleteTemplateObjects(template:TemplateMetadata){
-  if(templateStorageProvider()==='cos'){
+  const provider=templateStorageProvider();
+  if(provider==='cos'){
     await Promise.all([
       cosDelete(template.objectKey),
       template.foregroundObjectKey?cosDelete(template.foregroundObjectKey):Promise.resolve(),
       cosDeletePrefix(template.id)
     ].map(task=>task.catch(()=>undefined)));
+    return;
+  }
+  if(provider==='database'){
+    const db=await templateDb();
+    await db.prepare('DELETE FROM template_objects WHERE object_key LIKE ?').bind(`${template.id}/%`).run();
     return;
   }
   await rm(path.join(storageRoot,template.id),{recursive:true,force:true});
