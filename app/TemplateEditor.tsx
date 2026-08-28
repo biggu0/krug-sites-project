@@ -38,7 +38,25 @@ function mapSvgPoint(element:SVGGraphicsElement,svg:SVGSVGElement,x:number,y:num
 }
 
 function basicShapePoints(element:SVGGraphicsElement,svg:SVGSVGElement):Point[]{
-  if(element instanceof SVGRectElement){const x=element.x.baseVal.value,y=element.y.baseVal.value,width=element.width.baseVal.value,height=element.height.baseVal.value;if(width<=0||height<=0)return[];return[mapSvgPoint(element,svg,x,y),mapSvgPoint(element,svg,x+width,y),mapSvgPoint(element,svg,x+width,y+height),mapSvgPoint(element,svg,x,y+height)];}
+  if(element instanceof SVGRectElement){
+    const x=element.x.baseVal.value,y=element.y.baseVal.value,width=element.width.baseVal.value,height=element.height.baseVal.value;
+    if(width<=0||height<=0)return[];
+    let rx=element.rx.baseVal.value,ry=element.ry.baseVal.value;
+    if(rx>0&&ry<=0)ry=rx;if(ry>0&&rx<=0)rx=ry;
+    rx=Math.min(Math.max(0,rx),width/2);ry=Math.min(Math.max(0,ry),height/2);
+    if(rx<=0||ry<=0)return[mapSvgPoint(element,svg,x,y),mapSvgPoint(element,svg,x+width,y),mapSvgPoint(element,svg,x+width,y+height),mapSvgPoint(element,svg,x,y+height)];
+    const k=.5522847498307936,map=(px:number,py:number)=>mapSvgPoint(element,svg,px,py),make=(px:number,py:number,incoming?:[number,number],outgoing?:[number,number]):Point=>{const point=map(px,py),inside=incoming?map(...incoming):null,outside=outgoing?map(...outgoing):null;return{...point,...(inside?{inX:inside.x,inY:inside.y}:{}),...(outside?{outX:outside.x,outY:outside.y}:{})};};
+    return[
+      make(x+rx,y,[x+rx-k*rx,y]),
+      make(x+width-rx,y,undefined,[x+width-rx+k*rx,y]),
+      make(x+width,y+ry,[x+width,y+ry-k*ry]),
+      make(x+width,y+height-ry,undefined,[x+width,y+height-ry+k*ry]),
+      make(x+width-rx,y+height,[x+width-rx+k*rx,y+height]),
+      make(x+rx,y+height,undefined,[x+rx-k*rx,y+height]),
+      make(x,y+height-ry,[x,y+height-ry+k*ry]),
+      make(x,y+ry,undefined,[x,y+ry-k*ry]),
+    ];
+  }
   if(element instanceof SVGPolygonElement||element instanceof SVGPolylineElement){const raw=Array.from(element.points).map(point=>mapSvgPoint(element,svg,point.x,point.y));if(element instanceof SVGPolylineElement&&raw.length>1&&Math.hypot(raw.at(-1)!.x-raw[0].x,raw.at(-1)!.y-raw[0].y)>.001)return[];if(raw.length>1&&Math.hypot(raw.at(-1)!.x-raw[0].x,raw.at(-1)!.y-raw[0].y)<.001)raw.pop();return raw;}
   return[];
 }
