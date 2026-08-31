@@ -19,9 +19,26 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_organizations (
+  user_id INTEGER NOT NULL,
+  organization_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(user_id, organization_id),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS templates (
   id TEXT PRIMARY KEY,
-  normalized_name TEXT NOT NULL UNIQUE,
+  organization_id TEXT NOT NULL DEFAULT 'org_default',
+  normalized_name TEXT NOT NULL,
   name TEXT NOT NULL,
   file_name TEXT NOT NULL,
   object_key TEXT NOT NULL,
@@ -35,9 +52,11 @@ CREATE TABLE IF NOT EXISTS templates (
   rotate_cover INTEGER,
   rotate_inner INTEGER,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  UNIQUE(organization_id, normalized_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_templates_updated_at ON templates(updated_at);
+CREATE INDEX IF NOT EXISTS idx_templates_organization_updated_at ON templates(organization_id, updated_at);
 
 PRAGMA optimize;

@@ -1,11 +1,12 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { initializeAuth, requirePermission } from '../_auth';
+import { canAccessOrganization, defaultOrganizationId, initializeAuth, requirePermission, resolveOrganizationId, type SessionUser } from '../_auth';
 
 export type PageMode='all'|'odd'|'even';
 export type TemplateMetadata={
   id:string;
+  organizationId:string;
   name:string;
   fileName:string;
   objectKey:string;
@@ -23,7 +24,7 @@ export type TemplateMetadata={
 };
 
 type CosConfig={secretId:string;secretKey:string;region:string;bucket:string;cdnDomain?:string};
-type TemplateRow={id:string;normalized_name:string;name:string;file_name:string;object_key:string;foreground_file_name?:string|null;foreground_object_key?:string|null;regions?:string|null;has_cover?:number|null;page_count?:number|null;page_mode?:PageMode|null;duplex?:number|null;rotate_cover?:number|null;rotate_inner?:number|null;created_at:number;updated_at:number};
+type TemplateRow={id:string;organization_id?:string|null;normalized_name:string;name:string;file_name:string;object_key:string;foreground_file_name?:string|null;foreground_object_key?:string|null;regions?:string|null;has_cover?:number|null;page_count?:number|null;page_mode?:PageMode|null;duplex?:number|null;rotate_cover?:number|null;rotate_inner?:number|null;created_at:number;updated_at:number};
 type TemplateDb={prepare:(sql:string)=>{bind:(...values:unknown[])=>TemplateDbStatement;run:()=>Promise<unknown>;first:<T=unknown>()=>Promise<T|undefined>;all:<T=unknown>()=>Promise<{results:T[]}>}};
 type TemplateDbStatement={bind:(...values:unknown[])=>TemplateDbStatement;run:()=>Promise<unknown>;first:<T=unknown>()=>Promise<T|undefined>;all:<T=unknown>()=>Promise<{results:T[]}>};
 
@@ -37,6 +38,10 @@ function hex(bytes:ArrayBuffer|Uint8Array){
 
 export async function requireTemplatePermission(request:Request){
   return requirePermission(request,'templates');
+}
+
+export function resolveTemplateOrganization(user:SessionUser,requested?:string|null){
+  return resolveOrganizationId(user,requested);
 }
 
 export function templateStorageUnavailableHint(){
@@ -87,15 +92,17 @@ function dbValue<T>(value:T|undefined){
 
 async function templateDb():Promise<TemplateDb>{
   const db=await initializeAuth() as unknown as TemplateDb;
-  await db.prepare('CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, normalized_name TEXT NOT NULL UNIQUE, name TEXT NOT NULL, file_name TEXT NOT NULL, object_key TEXT NOT NULL, foreground_file_name TEXT, foreground_object_key TEXT, regions TEXT, has_cover INTEGER, page_count INTEGER, page_mode TEXT, duplex INTEGER, rotate_cover INTEGER, rotate_inner INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)').run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL DEFAULT '${defaultOrganizationId}', normalized_name TEXT NOT NULL, name TEXT NOT NULL, file_name TEXT NOT NULL, object_key TEXT NOT NULL, foreground_file_name TEXT, foreground_object_key TEXT, regions TEXT, has_cover INTEGER, page_count INTEGER, page_mode TEXT, duplex INTEGER, rotate_cover INTEGER, rotate_inner INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(organization_id, normalized_name))`).run();
   await db.prepare('CREATE TABLE IF NOT EXISTS template_objects (object_key TEXT PRIMARY KEY, content_type TEXT NOT NULL, body BLOB NOT NULL, updated_at INTEGER NOT NULL)').run();
   await db.prepare('CREATE INDEX IF NOT EXISTS templates_updated_idx ON templates(updated_at)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS templates_organization_updated_idx ON templates(organization_id, updated_at)').run();
   return db;
 }
 
 function rowToTemplate(row:TemplateRow):TemplateMetadata{
   return{
     id:row.id,
+    organizationId:row.organization_id||defaultOrganizationId,
     name:row.name,
     fileName:row.file_name,
     objectKey:row.object_key,
@@ -379,23 +386,38 @@ export async function listTemplates(){
   return rows.results.map(rowToTemplate);
 }
 
+export async function listTemplatesForOrganization(organizationId:string){
+  const db=await templateDb(),rows=await db.prepare('SELECT * FROM templates WHERE organization_id=? ORDER BY updated_at DESC').bind(organizationId).all<TemplateRow>();
+  return rows.results.map(rowToTemplate);
+}
+
+export async function listTemplatesForUser(user:SessionUser){
+  const groups=await Promise.all(user.organizationIds.map(listTemplatesForOrganization));
+  return groups.flat().sort((a,b)=>b.updatedAt-a.updatedAt);
+}
+
 export async function getTemplate(id:string){
   const db=await templateDb(),row=await db.prepare('SELECT * FROM templates WHERE id=?').bind(id).first<TemplateRow>();
   return row?rowToTemplate(row):undefined;
 }
 
-export async function readTemplateFile(id:string,kind:'file'|'foreground'){
+export async function readTemplateFile(id:string,kind:'file'|'foreground',user?:SessionUser){
   const template=await getTemplate(id);
   if(!template)throw new Error('模板不存在');
+  if(user)assertTemplateAccess(template,user);
   const key=kind==='foreground'?template.foregroundObjectKey:template.objectKey;
   if(!key)throw new Error('模板文件不存在');
   return readObject(key);
 }
 
-export async function createTemplate(input:{name:string;file:File;metadata?:Partial<TemplateMetadata>;foregroundFile?:File}){
+export function assertTemplateAccess(template:TemplateMetadata,user:SessionUser){
+  if(!canAccessOrganization(user,template.organizationId))throw new Error('没有此组织模板权限');
+}
+
+export async function createTemplate(input:{organizationId:string;name:string;file:File;metadata?:Partial<TemplateMetadata>;foregroundFile?:File}){
   const actualPageCount=await validatePdfFile(input.file,'template'),metadata=cleanMetadata(input.metadata??{},actualPageCount);
-  const now=Date.now(),id=newTemplateId(),name=cleanName(input.name||input.file.name.replace(/\.pdf$/i,'')),normalized=normalizedName(name),fileName=pdfFileName(input.file.name||name),objectKey=`${id}/${fileName}`,db=await templateDb();
-  if(await db.prepare('SELECT id FROM templates WHERE normalized_name=? AND id<>?').bind(normalized,id).first())throw new Error(`模板名称“${name.replace(/\.pdf$/i,'')}”已存在，请使用其他名称`);
+  const now=Date.now(),id=newTemplateId(),organizationId=input.organizationId,name=cleanName(input.name||input.file.name.replace(/\.pdf$/i,'')),normalized=normalizedName(name),fileName=pdfFileName(input.file.name||name),objectKey=`${id}/${fileName}`,db=await templateDb();
+  if(await db.prepare('SELECT id FROM templates WHERE organization_id=? AND normalized_name=? AND id<>?').bind(organizationId,normalized,id).first())throw new Error(`模板名称“${name.replace(/\.pdf$/i,'')}”已存在，请使用其他名称`);
   await writeObject(objectKey,input.file);
 
   let foregroundFileName: string|undefined;
@@ -410,6 +432,7 @@ export async function createTemplate(input:{name:string;file:File;metadata?:Part
 
   const template:TemplateMetadata={
     id,
+    organizationId,
     name,
     fileName,
     objectKey,
@@ -426,8 +449,8 @@ export async function createTemplate(input:{name:string;file:File;metadata?:Part
     updatedAt:now
   };
   try{
-    await db.prepare('INSERT INTO templates(id,normalized_name,name,file_name,object_key,foreground_file_name,foreground_object_key,regions,has_cover,page_count,page_mode,duplex,rotate_cover,rotate_inner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(
-      id,normalized,name,fileName,objectKey,dbValue(foregroundFileName),dbValue(foregroundObjectKey),dbValue(metadata.regions?JSON.stringify(metadata.regions):undefined),metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,now,now
+    await db.prepare('INSERT INTO templates(id,organization_id,normalized_name,name,file_name,object_key,foreground_file_name,foreground_object_key,regions,has_cover,page_count,page_mode,duplex,rotate_cover,rotate_inner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(
+      id,organizationId,normalized,name,fileName,objectKey,dbValue(foregroundFileName),dbValue(foregroundObjectKey),dbValue(metadata.regions?JSON.stringify(metadata.regions):undefined),metadata.hasCover?1:0,metadata.pageCount,metadata.pageMode,metadata.duplex?1:0,metadata.rotateCover?1:0,metadata.rotateInner?1:0,now,now
     ).run();
   }catch(error){
     await deleteTemplateObjects(template).catch(()=>undefined);
@@ -437,11 +460,12 @@ export async function createTemplate(input:{name:string;file:File;metadata?:Part
   return template;
 }
 
-export async function updateTemplate(id:string,patch:Partial<TemplateMetadata>){
+export async function updateTemplate(id:string,patch:Partial<TemplateMetadata>,user?:SessionUser){
   const db=await templateDb(),template=await getTemplate(id);
   if(!template)throw new Error('模板不存在');
+  if(user)assertTemplateAccess(template,user);
   const name=patch.name===undefined?template.name:cleanName(patch.name),normalized=normalizedName(name);
-  if(await db.prepare('SELECT id FROM templates WHERE normalized_name=? AND id<>?').bind(normalized,id).first())throw new Error(`模板名称“${name.replace(/\.pdf$/i,'')}”已存在，请使用其他名称`);
+  if(await db.prepare('SELECT id FROM templates WHERE organization_id=? AND normalized_name=? AND id<>?').bind(template.organizationId,normalized,id).first())throw new Error(`模板名称“${name.replace(/\.pdf$/i,'')}”已存在，请使用其他名称`);
   const pageCount=patch.pageCount===undefined?template.pageCount:Number(patch.pageCount);
   if(!pageCount||![12,13,24,25].includes(pageCount))throw new Error(`模板页数不受支持：${pageCount}`);
   const metadata=cleanMetadata({
@@ -471,9 +495,10 @@ export async function updateTemplate(id:string,patch:Partial<TemplateMetadata>){
   return template;
 }
 
-export async function updateTemplateForeground(id:string,file:File){
+export async function updateTemplateForeground(id:string,file:File,user?:SessionUser){
   const db=await templateDb(),template=await getTemplate(id);
   if(!template)throw new Error('模板不存在');
+  if(user)assertTemplateAccess(template,user);
   const pageCount=await validatePdfFile(file,'foreground');
   if(template.pageCount&&pageCount!==template.pageCount)throw new Error(`前景保护层页数 ${pageCount} 与背景模板 ${template.pageCount} 不一致`);
   const foregroundFileName=pdfFileName(file.name||`${template.name}-foreground.pdf`),foregroundObjectKey=`${id}/${foregroundFileName}`;
@@ -486,9 +511,10 @@ export async function updateTemplateForeground(id:string,file:File){
   return template;
 }
 
-export async function deleteTemplate(id:string){
+export async function deleteTemplate(id:string,user?:SessionUser){
   const db=await templateDb(),template=await getTemplate(id);
   if(!template)throw new Error('模板不存在');
+  if(user)assertTemplateAccess(template,user);
   await deleteTemplateObjects(template);
   await db.prepare('DELETE FROM templates WHERE id=?').bind(id).run();
 }
@@ -496,6 +522,7 @@ export async function deleteTemplate(id:string){
 export function publicTemplate(template:TemplateMetadata){
   return{
     id:template.id,
+    organizationId:template.organizationId,
     name:template.name,
     fileName:template.fileName,
     foregroundFileName:template.foregroundFileName,
