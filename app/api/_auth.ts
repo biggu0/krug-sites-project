@@ -1,6 +1,6 @@
 export type Permission='customization'|'templates'|'accounts';
 export type Organization={id:string;name:string;createdAt:number;updatedAt:number};
-export type SessionUser={id:number;username:string;permissions:Permission[];organizations:Organization[];organizationIds:string[]};
+export type SessionUser={id:number;username:string;permissions:Permission[];organizations:Organization[];organizationIds:string[];isSuperAdmin:boolean};
 
 type UserRow={id:number;username:string;password_hash:string;salt:string;permissions:string;active:number;created_at:number};
 type SessionRow={token_hash:string;user_id:number;expires_at:number;created_at:number};
@@ -43,8 +43,9 @@ async function localDatabase():Promise<AuthDb>{
       const userOrganizations=[...(state.userOrganizations??[]).filter(item=>organizationIds.has(item.organization_id))];
       const assigned=new Set(userOrganizations.map(item=>`${item.user_id}:${item.organization_id}`));
       for(const user of users){
+        const hasOrganization=userOrganizations.some(item=>item.user_id===user.id);
         const key=`${user.id}:${defaultOrganizationId}`;
-        if(!assigned.has(key)){
+        if(!hasOrganization&&!assigned.has(key)){
           userOrganizations.push({user_id:user.id,organization_id:defaultOrganizationId,created_at:now});
           assigned.add(key);
         }
@@ -110,7 +111,7 @@ async function localDatabase():Promise<AuthDb>{
           }else if(normalized.startsWith('INSERT OR IGNORE INTO USER_ORGANIZATIONS')&&normalized.includes('SELECT ID')){
             const organizationId=String(values[0]),createdAt=Number(values[1]);
             for(const user of state.users){
-              if(!state.userOrganizations.some(item=>item.user_id===user.id&&item.organization_id===organizationId)){
+              if(!state.userOrganizations.some(item=>item.user_id===user.id)){
                 state.userOrganizations.push({user_id:user.id,organization_id:organizationId,created_at:createdAt});
                 dirty=true;
               }
@@ -217,7 +218,7 @@ async function localDatabase():Promise<AuthDb>{
         }
       };
     }
-    return{prepare:statement,batch:async statements=>Promise.all(statements.map(item=>item.run()))};
+    return{prepare:statement,batch:async statements=>{const results:unknown[]=[];for(const item of statements)results.push(await item.run());return results;}};
   })();
   return localDbPromise;
 }
@@ -259,7 +260,7 @@ await migrateTemplateUniqueConstraint(db);
 await ignoreMigrationError(db.prepare(`ALTER TABLE templates ADD COLUMN organization_id TEXT DEFAULT '${defaultOrganizationId}'`).run());
 await db.prepare('INSERT OR IGNORE INTO organizations(id,name,created_at,updated_at) VALUES(?,?,?,?)').bind(defaultOrganizationId,defaultOrganizationName,now,now).run();
 await db.prepare('UPDATE templates SET organization_id=? WHERE organization_id IS NULL OR organization_id=""').bind(defaultOrganizationId).run();
-await db.prepare('INSERT OR IGNORE INTO user_organizations(user_id,organization_id,created_at) SELECT id,?,? FROM users').bind(defaultOrganizationId,now).run();
+await db.prepare('INSERT OR IGNORE INTO user_organizations(user_id,organization_id,created_at) SELECT users.id,?,? FROM users WHERE NOT EXISTS (SELECT 1 FROM user_organizations WHERE user_organizations.user_id=users.id)').bind(defaultOrganizationId,now).run();
 await db.prepare('CREATE INDEX IF NOT EXISTS templates_organization_updated_idx ON templates(organization_id, updated_at)').run();
 return db;}
 
@@ -269,14 +270,16 @@ export function validCredentials(username:unknown,password:unknown){const name=S
 export function parseCookies(request:Request){return Object.fromEntries((request.headers.get('cookie')??'').split(';').map(item=>item.trim().split('=').map(decodeURIComponent)).filter(item=>item.length===2));}
 export async function listOrganizations(){const db=await initializeAuth(),rows=await db.prepare('SELECT id,name,created_at,updated_at FROM organizations ORDER BY name').all<{id:string;name:string;created_at:number;updated_at:number}>();return rows.results.map(toOrganization);}
 export async function listUserOrganizations(userId:number){const db=await initializeAuth(),rows=await db.prepare('SELECT organizations.id, organizations.name, organizations.created_at, organizations.updated_at FROM user_organizations JOIN organizations ON organizations.id=user_organizations.organization_id WHERE user_organizations.user_id=? ORDER BY organizations.name').bind(userId).all<{id:string;name:string;created_at:number;updated_at:number}>();return rows.results.map(toOrganization);}
-export async function replaceUserOrganizations(userId:number,organizationIds:string[]){const clean=[...new Set(organizationIds.map(id=>String(id).trim()).filter(Boolean))];if(!clean.length)throw new Error('账号至少需要属于一个组织');const db=await initializeAuth();for(const id of clean){const row=await db.prepare('SELECT id FROM organizations WHERE id=?').bind(id).first<{id:string}>();if(!row)throw new Error('选择的组织不存在');}await db.prepare('DELETE FROM user_organizations WHERE user_id=?').bind(userId).run();const now=Date.now();await Promise.all(clean.map(id=>db.prepare('INSERT OR IGNORE INTO user_organizations(user_id,organization_id,created_at) VALUES(?,?,?)').bind(userId,id,now).run()));}
+export async function validateOrganizationIds(organizationIds:string[]){const clean=[...new Set(organizationIds.map(id=>String(id).trim()).filter(Boolean))];if(!clean.length)throw new Error('账号至少需要属于一个组织');const db=await initializeAuth();for(const id of clean){const row=await db.prepare('SELECT id FROM organizations WHERE id=?').bind(id).first<{id:string}>();if(!row)throw new Error('选择的组织不存在');}return clean;}
+export async function replaceUserOrganizations(userId:number,organizationIds:string[]){const clean=await validateOrganizationIds(organizationIds),db=await initializeAuth(),now=Date.now();await db.batch([db.prepare('DELETE FROM user_organizations WHERE user_id=?').bind(userId),...clean.map(id=>db.prepare('INSERT OR IGNORE INTO user_organizations(user_id,organization_id,created_at) VALUES(?,?,?)').bind(userId,id,now))]);}
 export async function createOrganization(nameValue:unknown){const name=String(nameValue??'').trim();if(name.length<2||name.length>40)throw new Error('组织名称需要2到40个字符');const db=await initializeAuth();if(await db.prepare('SELECT id FROM organizations WHERE name=?').bind(name).first())throw new Error('组织名称已存在');const now=Date.now(),id=`org_${now.toString(36)}_${crypto.randomUUID().slice(0,8)}`;await db.prepare('INSERT INTO organizations(id,name,created_at,updated_at) VALUES(?,?,?,?)').bind(id,name,now,now).run();return{id,name,createdAt:now,updatedAt:now};}
-export async function updateOrganization(idValue:unknown,nameValue:unknown){const id=String(idValue??'').trim(),name=String(nameValue??'').trim();if(!id)throw new Error('组织不存在');if(name.length<2||name.length>40)throw new Error('组织名称需要2到40个字符');const db=await initializeAuth();if(await db.prepare('SELECT id FROM organizations WHERE name=? AND id<>?').bind(name,id).first())throw new Error('组织名称已存在');await db.prepare('UPDATE organizations SET name=?, updated_at=? WHERE id=?').bind(name,Date.now(),id).run();}
+export async function updateOrganization(idValue:unknown,nameValue:unknown){const id=String(idValue??'').trim(),name=String(nameValue??'').trim();if(!id)throw new Error('组织不存在');if(name.length<2||name.length>40)throw new Error('组织名称需要2到40个字符');const db=await initializeAuth();if(!await db.prepare('SELECT id FROM organizations WHERE id=?').bind(id).first())throw new Error('组织不存在');if(await db.prepare('SELECT id FROM organizations WHERE name=? AND id<>?').bind(name,id).first())throw new Error('组织名称已存在');await db.prepare('UPDATE organizations SET name=?, updated_at=? WHERE id=?').bind(name,Date.now(),id).run();}
 export async function deleteOrganization(idValue:unknown){const id=String(idValue??'').trim();if(id===defaultOrganizationId)throw new Error('默认组织不能删除');const db=await initializeAuth(),users=await db.prepare('SELECT COUNT(*) AS count FROM user_organizations WHERE organization_id=?').bind(id).first<{count:number}>(),templates=await db.prepare('SELECT COUNT(*) AS count FROM templates WHERE organization_id=?').bind(id).first<{count:number}>();if(Number(users?.count??0)>0)throw new Error('该组织仍有关联账号，不能删除');if(Number(templates?.count??0)>0)throw new Error('该组织仍有关联模板，不能删除');await db.prepare('DELETE FROM organizations WHERE id=?').bind(id).run();}
-export function resolveOrganizationId(user:SessionUser,requested?:string|null){const fallback=user.organizationIds[0]??defaultOrganizationId;if(!requested)return fallback;if(!user.organizationIds.includes(requested))throw new Error('没有此组织权限');return requested;}
-export function canAccessOrganization(user:SessionUser,organizationId:string){return user.organizationIds.includes(organizationId);}
-export async function getSessionUser(request:Request):Promise<SessionUser|null>{const token=parseCookies(request).jht_session;if(!token)return null;const db=await initializeAuth(),now=Math.floor(Date.now()/1000),row=await db.prepare('SELECT users.id, users.username, users.permissions FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at>? AND users.active=1').bind(await sha256(token),now).first<{id:number;username:string;permissions:string}>();if(!row)return null;const organizations=await listUserOrganizations(row.id);return{id:row.id,username:row.username,permissions:cleanPermissions(JSON.parse(row.permissions)),organizations,organizationIds:organizations.map(item=>item.id)};}
-export async function requirePermission(request:Request,permission:Permission){const user=await getSessionUser(request);if(!user)return{error:Response.json({error:'请先登录'},{status:401})};if(!user.permissions.includes(permission))return{error:Response.json({error:'没有此项权限'},{status:403})};return{user};}
+export function isSuperAdminId(id:number){return id===1;}
+export function resolveOrganizationId(user:SessionUser,requested?:string|null){const fallback=user.organizationIds.includes(defaultOrganizationId)?defaultOrganizationId:user.organizationIds[0];if(!requested){if(!fallback)throw new Error('账号尚未加入任何组织');return fallback;}if(!user.organizationIds.includes(requested))throw new Error('组织不存在或没有此组织权限');return requested;}
+export function canAccessOrganization(user:SessionUser,organizationId:string){return user.isSuperAdmin||user.organizationIds.includes(organizationId);}
+export async function getSessionUser(request:Request):Promise<SessionUser|null>{const token=parseCookies(request).jht_session;if(!token)return null;const db=await initializeAuth(),now=Math.floor(Date.now()/1000),row=await db.prepare('SELECT users.id, users.username, users.permissions FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at>? AND users.active=1').bind(await sha256(token),now).first<{id:number;username:string;permissions:string}>();if(!row)return null;const isSuperAdmin=isSuperAdminId(row.id),organizations=isSuperAdmin?await listOrganizations():await listUserOrganizations(row.id),permissions=isSuperAdmin?[...allowedPermissions]:cleanPermissions(JSON.parse(row.permissions));return{id:row.id,username:row.username,permissions,organizations,organizationIds:organizations.map(item=>item.id),isSuperAdmin};}
+export async function requirePermission(request:Request,permission:Permission){const user=await getSessionUser(request);if(!user)return{error:Response.json({error:'请先登录'},{status:401})};if(!user.isSuperAdmin&&!user.permissions.includes(permission))return{error:Response.json({error:'没有此项权限'},{status:403})};return{user};}
 export async function createSession(userId:number){const db=await initializeAuth(),token=randomToken(),now=Math.floor(Date.now()/1000),expires=now+60*60*12;await db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)').bind(await sha256(token),userId,expires,now).run();return{token,expires};}
 export async function deleteSession(request:Request){const token=parseCookies(request).jht_session;if(token){const db=await initializeAuth();await db.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await sha256(token)).run();}}
 export function sessionCookie(token:string,maxAge=60*60*12){const secure=process.env.AUTH_COOKIE_SECURE==='true';return`jht_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;}

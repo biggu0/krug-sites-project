@@ -3,7 +3,7 @@ import {createContext,FormEvent,ReactNode,useContext,useEffect,useState} from 'r
 
 export type Permission='customization'|'templates'|'accounts';
 export type Organization={id:string;name:string;createdAt:number;updatedAt:number};
-export type AuthUser={id:number;username:string;permissions:Permission[];organizations:Organization[];organizationIds:string[]};
+export type AuthUser={id:number;username:string;permissions:Permission[];organizations:Organization[];organizationIds:string[];isSuperAdmin:boolean};
 
 type StatusPayload={setupRequired:boolean;user?:AuthUser|null;error?:string};
 type ActionPayload={ok?:boolean;error?:string};
@@ -68,7 +68,7 @@ export default function AuthGate({children}:{children:ReactNode}){
         {error&&<div className="login-error">{error}</div>}
         <button disabled={busy}>{busy?'正在处理…':setupRequired?'创建管理员并进入':'登录'}</button>
       </form>
-      <small className="privacy-note">密码经过不可逆加密处理；订单图片和模板不会上传到账号服务器。</small>
+      <small className="privacy-note">密码经过不可逆加密处理；模板按组织权限安全存储，订单工作数据仍保存在当前浏览器。</small>
     </section>
   </main>;
   return <AuthContext.Provider value={{user,logout}}>{children}</AuthContext.Provider>;

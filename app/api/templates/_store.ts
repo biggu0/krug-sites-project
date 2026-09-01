@@ -392,6 +392,7 @@ export async function listTemplatesForOrganization(organizationId:string){
 }
 
 export async function listTemplatesForUser(user:SessionUser){
+  if(user.isSuperAdmin)return listTemplates();
   const groups=await Promise.all(user.organizationIds.map(listTemplatesForOrganization));
   return groups.flat().sort((a,b)=>b.updatedAt-a.updatedAt);
 }

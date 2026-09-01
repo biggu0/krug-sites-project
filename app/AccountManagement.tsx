@@ -2,7 +2,7 @@
 import {FormEvent,useEffect,useState} from 'react';
 import {Organization,Permission,useAuth} from './AuthGate';
 
-type Account={id:number;username:string;permissions:Permission[];active:boolean;created_at:number;organizationIds:string[]};
+type Account={id:number;username:string;permissions:Permission[];active:boolean;created_at:number;organizationIds:string[];isSuperAdmin:boolean};
 type AccountsPayload={users:Account[];organizations:Organization[];error?:string};
 
 const permissionLabels:Record<Permission,string>={customization:'定制处理',templates:'模板管理',accounts:'账号管理'};
@@ -139,7 +139,7 @@ export default function AccountManagement(){
   };
 
   return <main className="account-page with-sidebar">
-    <header className="system-bar page-topbar"><div className="page-heading"><b>账号、组织与权限</b><span>组织决定模板可见范围</span></div></header>
+    <header className="system-bar page-topbar"><div className="page-heading"><b>账号、组织与权限</b><span>组织内共享模板，超级管理员可访问全部组织</span></div></header>
     <div className="account-content">
       <section className="account-create">
         <h2>创建账号</h2>
@@ -147,7 +147,7 @@ export default function AccountManagement(){
           <label>用户名<input name="username" minLength={3} maxLength={40} required/></label>
           <label>初始密码<input name="password" type="password" minLength={10} maxLength={128} required/></label>
           <fieldset><legend>菜单权限</legend>{permissions.map(key=><label key={key}><input type="checkbox" name={key} defaultChecked={key!=='accounts'}/>{permissionLabels[key]}</label>)}</fieldset>
-          <fieldset><legend>所属组织</legend>{organizations.map(item=><label key={item.id}><input type="checkbox" name="organizationIds" value={item.id} defaultChecked={item.id===user.organizationIds[0]}/>{item.name}</label>)}</fieldset>
+          <fieldset><legend>所属组织</legend>{organizations.map(item=><label key={item.id}><input type="checkbox" name="organizationIds" value={item.id} defaultChecked={item.id===(user.organizationIds.includes('org_default')?'org_default':user.organizationIds[0])}/>{item.name}</label>)}</fieldset>
           <button disabled={busy}>{busy?'创建中…':'创建账号'}</button>
         </form>
         <form className="organization-create" onSubmit={createOrganization}>
@@ -159,11 +159,11 @@ export default function AccountManagement(){
       <section className="account-list">
         <div className="account-title"><h2>现有账号</h2><span>{accounts.length}</span></div>
         {accounts.map(account=><article key={account.id}>
-          <div><b>{account.username}</b><small>{account.id===user.id?'当前账号':'账号'} · {account.active?'已启用':'已停用'}</small></div>
-          <div className="permission-switches">{permissions.map(key=><label key={key}><input type="checkbox" checked={account.permissions.includes(key)} onChange={event=>update(account,{permissions:event.target.checked?[...account.permissions,key]:account.permissions.filter(item=>item!==key)})}/>{permissionLabels[key]}</label>)}</div>
-          <div className="organization-switches">{organizations.map(item=><label key={item.id}><input type="checkbox" checked={account.organizationIds.includes(item.id)} onChange={event=>toggleOrganization(account,item.id,event.target.checked)}/>{item.name}</label>)}</div>
-          <button className={account.active?'disable':'enable'} disabled={account.id===user.id} onClick={()=>update(account,{active:!account.active})}>{account.active?'停用':'启用'}</button>
-          <button className="delete" disabled={account.id===user.id} onClick={()=>remove(account)}>删除</button>
+          <div><b>{account.username}</b><small>{account.isSuperAdmin?'超级管理员 Admin':account.id===user.id?'当前账号':'账号'} · {account.active?'已启用':'已停用'}</small></div>
+          <div className="permission-switches">{permissions.map(key=><label key={key}><input type="checkbox" disabled={account.isSuperAdmin} checked={account.isSuperAdmin||account.permissions.includes(key)} onChange={event=>update(account,{permissions:event.target.checked?[...account.permissions,key]:account.permissions.filter(item=>item!==key)})}/>{permissionLabels[key]}</label>)}</div>
+          <div className="organization-switches">{organizations.map(item=><label key={item.id}><input type="checkbox" disabled={account.isSuperAdmin} checked={account.isSuperAdmin||account.organizationIds.includes(item.id)} onChange={event=>toggleOrganization(account,item.id,event.target.checked)}/>{item.name}</label>)}</div>
+          <button className={account.active?'disable':'enable'} disabled={account.id===user.id||account.isSuperAdmin} onClick={()=>update(account,{active:!account.active})}>{account.active?'停用':'启用'}</button>
+          <button className="delete" disabled={account.id===user.id||account.isSuperAdmin} onClick={()=>remove(account)}>删除</button>
         </article>)}
         <div className="organization-list">
           <h2>组织列表</h2>
