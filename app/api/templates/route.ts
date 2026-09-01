@@ -1,33 +1,69 @@
-import { createTemplate, listTemplatesForOrganization, listTemplatesForUser, publicTemplate, requireTemplatePermission, resolveTemplateOrganization, templateStorageProvider, templateStorageUnavailableHint } from './_store';
+import {
+  createTemplate,
+  listTemplatesForOrganization,
+  listTemplatesForUser,
+  publicTemplate,
+  requireTemplatePermission,
+  resolveTemplateOrganization,
+  templateStorageProvider,
+  templateStorageUnavailableHint
+} from './_store';
 
-export async function GET(request:Request){
-  const auth=await requireTemplatePermission(request);
-  if('error'in auth)return auth.error;
-  try{
-    const requestedOrganizationId=new URL(request.url).searchParams.get('organizationId');
-    const templates=requestedOrganizationId?await listTemplatesForOrganization(resolveTemplateOrganization(auth.user,requestedOrganizationId)):await listTemplatesForUser(auth.user);
-    return Response.json({provider:templateStorageProvider(),user:auth.user,templates:templates.map(publicTemplate)});
-  }catch(error){
-    return Response.json({error:error instanceof Error?error.message:'模板列表读取失败'},{status:403});
+export async function GET(request: Request) {
+  const auth = await requireTemplatePermission(request);
+  if ('error' in auth) return auth.error;
+  try {
+    const requestedOrganizationId = new URL(request.url).searchParams.get('organizationId');
+    const templates = requestedOrganizationId
+      ? await listTemplatesForOrganization(
+          resolveTemplateOrganization(auth.user, requestedOrganizationId)
+        )
+      : await listTemplatesForUser(auth.user);
+    return Response.json({
+      provider: templateStorageProvider(),
+      user: auth.user,
+      templates: templates.map(publicTemplate)
+    });
+  } catch (error) {
+    return Response.json(
+      {error: error instanceof Error ? error.message : '模板列表读取失败'},
+      {status: 403}
+    );
   }
 }
 
-export async function POST(request:Request){
-  const auth=await requireTemplatePermission(request);
-  if('error'in auth)return auth.error;
-  try{
-    const form=await request.formData(),file=form.get('file'),foreground=form.get('foregroundFile'),metadataRaw=form.get('metadata'),organizationId=resolveTemplateOrganization(auth.user,String(form.get('organizationId')??''));
-    if(!(file instanceof File))throw new Error('请上传 PDF 模板文件');
-    const metadata=metadataRaw?JSON.parse(String(metadataRaw)) as Record<string,unknown>:{};
-    const template=await createTemplate({
+export async function POST(request: Request) {
+  const auth = await requireTemplatePermission(request);
+  if ('error' in auth) return auth.error;
+  try {
+    const form = await request.formData(),
+      file = form.get('file'),
+      foreground = form.get('foregroundFile'),
+      metadataRaw = form.get('metadata'),
+      organizationId = resolveTemplateOrganization(
+        auth.user,
+        String(form.get('organizationId') ?? '')
+      );
+    if (!(file instanceof File)) throw new Error('请上传 PDF 模板文件');
+    const metadata = metadataRaw
+      ? (JSON.parse(String(metadataRaw)) as Record<string, unknown>)
+      : {};
+    const template = await createTemplate({
       organizationId,
-      name:String(form.get('name')??file.name.replace(/\.pdf$/i,'')),
+      name: String(form.get('name') ?? file.name.replace(/\.pdf$/i, '')),
       file,
-      foregroundFile:foreground instanceof File?foreground:undefined,
+      foregroundFile: foreground instanceof File ? foreground : undefined,
       metadata
     });
-    return Response.json({template:publicTemplate(template)});
-  }catch(error){
-    return Response.json({error:error instanceof Error?error.message:'模板上传失败',provider:templateStorageProvider(),hint:templateStorageUnavailableHint()},{status:400});
+    return Response.json({template: publicTemplate(template)});
+  } catch (error) {
+    return Response.json(
+      {
+        error: error instanceof Error ? error.message : '模板上传失败',
+        provider: templateStorageProvider(),
+        hint: templateStorageUnavailableHint()
+      },
+      {status: 400}
+    );
   }
 }

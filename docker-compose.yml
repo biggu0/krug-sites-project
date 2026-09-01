@@ -11,13 +11,13 @@ services:
     image: krug-sites:latest
     container_name: krug-sites
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
       AUTH_DB_PATH: /app/data/auth-db.json
-      AUTH_COOKIE_SECURE: "false"
+      AUTH_COOKIE_SECURE: 'false'
       TEMPLATE_STORAGE_PROVIDER: ${TEMPLATE_STORAGE_PROVIDER:-cos}
       TEMPLATE_STORAGE_DIR: /app/data/templates
       TENCENT_COS_SECRET_ID: ${TENCENT_COS_SECRET_ID:-}

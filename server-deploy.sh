@@ -6,6 +6,8 @@
 #
 # 可选环境变量：
 #   SITES_PORT  服务对外端口（默认 3000）
+#   BACKUP_ROOT 部署前数据库备份目录（默认 /root/krug-sites-backups）
+#   BACKUP_KEEP 保留最近多少个 auth-db 备份（默认 30，设置 0 不清理）
 #   模板文件默认写入 COS，需要提供 TENCENT_COS_SECRET_ID / TENCENT_COS_SECRET_KEY / TENCENT_COS_REGION / TENCENT_COS_BUCKET
 
 set -e
@@ -115,19 +117,30 @@ cecho "${YELLOW}准备重新部署站点服务...${NC}"
 cecho "${YELLOW}账号数据会保存在 Docker 卷 sites-auth-data-prod 中，除非手动删除该卷。${NC}"
 echo ""
 
+if [ -f "scripts/backup-auth-db-volume.sh" ]; then
+    echo ""
+    cecho "${GREEN}[1/4] 备份账号与模板索引数据库...${NC}"
+    COMPOSE_PROJECT=krug-sites-project \
+    BACKUP_ROOT="${BACKUP_ROOT:-/root/krug-sites-backups}" \
+    BACKUP_KEEP="${BACKUP_KEEP:-30}" \
+    sh scripts/backup-auth-db-volume.sh
+else
+    cecho "${YELLOW}⚠️ 未找到 scripts/backup-auth-db-volume.sh，跳过部署前备份${NC}"
+fi
+
 # 重新构建镜像
 echo ""
-cecho "${GREEN}[1/3] 构建 Docker 镜像（从源码构建）...${NC}"
+cecho "${GREEN}[2/4] 构建 Docker 镜像（从源码构建）...${NC}"
 docker-compose -p krug-sites-project -f docker-compose.prod.yml build --no-cache sites
 
 # 启动或滚动更新服务。不要使用 down，避免影响同机其他 Compose 项目。
 echo ""
-cecho "${GREEN}[2/3] 启动/更新服务...${NC}"
+cecho "${GREEN}[3/4] 启动/更新服务...${NC}"
 docker-compose -p krug-sites-project -f docker-compose.prod.yml up -d --no-deps sites
 
 # 等待服务启动
 echo ""
-cecho "${GREEN}[3/3] 等待服务启动...${NC}"
+cecho "${GREEN}[4/4] 等待服务启动...${NC}"
 sleep 10
 
 # 检查服务状态
@@ -143,6 +156,7 @@ echo "   docker logs -f krug-sites-prod"
 echo ""
 cecho "${YELLOW}🗄️ 数据库：${NC}"
 echo "   OpenAI Sites/Cloudflare 使用 D1；Docker 自托管使用 /app/data/auth-db.json（volume: sites-auth-data-prod）"
+echo "   部署前备份：${BACKUP_ROOT:-/root/krug-sites-backups}/auth-db-YYYYmmdd-HHMMSS.json"
 echo ""
 cecho "${YELLOW}📄 模板存储：${NC}"
 if [ "${TEMPLATE_STORAGE_PROVIDER:-cos}" = "cos" ]; then

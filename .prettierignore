@@ -1,0 +1,15 @@
+node_modules
+dist
+.next
+.vinext
+.wrangler
+.data
+.history
+
+.env
+.env.*
+!.env.example
+
+package-lock.json
+pnpm-lock.yaml
+public/default-template.zip

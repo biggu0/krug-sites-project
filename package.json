@@ -10,7 +10,10 @@
     "build": "node ./scripts/clean-dist.mjs && node ./scripts/prepare-pdfjs-assets.mjs && vinext build",
     "start": "set -a; [ -f .env ] && . ./.env; set +a; vinext start",
     "start:worker": "node ./scripts/start-worker.mjs",
+    "templates:restore-cos": "node ./scripts/restore-cos-templates.mjs",
     "sites:package": "npm run build && ./scripts/package-site.sh ./dist/site-package.tar.gz",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
@@ -33,6 +36,7 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "prettier": "^3.9.6",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",

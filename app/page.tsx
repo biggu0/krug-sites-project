@@ -1,10 +1,26 @@
 'use client';
 
-import { ChangeEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from 'react';
-import TemplateEditor,{Point,TemplateRegions} from './TemplateEditor';
-import AuthGate,{useAuth} from './AuthGate';
+import {
+  ChangeEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import TemplateEditor, {Point, TemplateRegions} from './TemplateEditor';
+import AuthGate, {useAuth} from './AuthGate';
 import AccountManagement from './AccountManagement';
-import {BatchArchiveMeta,deleteBatchArchive,deleteBatchArchives,listBatchArchives,loadBatchArchive,renameBatchArchive,saveBatchArchive} from './orderPersistence';
+import {
+  BatchArchiveMeta,
+  deleteBatchArchives,
+  listBatchArchives,
+  loadBatchArchive,
+  renameBatchArchive,
+  saveBatchArchive
+} from './orderPersistence';
 
 if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
   // 非 secure context（http://）下 crypto.randomUUID 不存在，补一个兼容实现
@@ -16,178 +32,4269 @@ if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
         return v.toString(16);
       }),
     configurable: true,
-    writable: true,
+    writable: true
   });
 }
 
-type Photo={id:string;file:File;url:string};
-type Transform={scale:number;x:number;y:number;rotation:number};
-type OrderStatus='pending'|'ready';
-type Order={id:string;name:string;cover:Photo;preview?:Photo;photos:Photo[];arrangement:Photo[];transforms:Record<string,Transform>;status:OrderStatus;sheetMatched:boolean;sku?:string;warehouse?:string;quantity:number};
-type OrderSheetRow={customId:string;sku:string;warehouse:string;quantity:number};
-type TemplateRecord={id:string;organizationId?:string;name:string;file?:File;fileUrl?:string;fileName?:string;foregroundFile?:File;foregroundUrl?:string;source:'default'|'custom';regions?:TemplateRegions;hasCover?:boolean;pageCount?:number;pageMode?:PageMode;duplex?:boolean;rotateCover?:boolean;rotateInner?:boolean;rotateImported?:boolean};
-type PageMode='all'|'odd'|'even';
-type PageSize={width:number;height:number};
-type TemplateManifest={format:string;version:number;templates:Array<{id:string;name:string;path:string;foregroundPath?:string;regions:TemplateRegions;hasCover:boolean;pageCount?:number;pageMode?:PageMode;duplex?:boolean;rotateCover?:boolean;rotateInner?:boolean;rotateImported?:boolean}>};
-type ManagedTemplate={id:string;organizationId:string;name:string;fileName:string;fileUrl:string;foregroundUrl?:string;regions?:TemplateRegions;hasCover?:boolean;pageCount?:number;pageMode?:PageMode;duplex?:boolean;rotateCover?:boolean;rotateInner?:boolean};
-type Filter='all'|OrderStatus|'unmatched'|'missing-template';
+type Photo = {id: string; file: File; url: string};
+type Transform = {scale: number; x: number; y: number; rotation: number};
+type OrderStatus = 'pending' | 'ready';
+type Order = {
+  id: string;
+  name: string;
+  cover: Photo;
+  preview?: Photo;
+  photos: Photo[];
+  arrangement: Photo[];
+  transforms: Record<string, Transform>;
+  status: OrderStatus;
+  sheetMatched: boolean;
+  sku?: string;
+  warehouse?: string;
+  quantity: number;
+};
+type OrderSheetRow = {customId: string; sku: string; warehouse: string; quantity: number};
+type TemplateRecord = {
+  id: string;
+  organizationId?: string;
+  name: string;
+  file?: File;
+  fileUrl?: string;
+  fileName?: string;
+  foregroundFile?: File;
+  foregroundUrl?: string;
+  source: 'default' | 'custom';
+  regions?: TemplateRegions;
+  hasCover?: boolean;
+  pageCount?: number;
+  pageMode?: PageMode;
+  duplex?: boolean;
+  rotateCover?: boolean;
+  rotateInner?: boolean;
+  rotateImported?: boolean;
+};
+type PageMode = 'all' | 'odd' | 'even';
+type PageSize = {width: number; height: number};
+type TemplateManifest = {
+  format: string;
+  version: number;
+  templates: Array<{
+    id: string;
+    name: string;
+    path: string;
+    foregroundPath?: string;
+    regions: TemplateRegions;
+    hasCover: boolean;
+    pageCount?: number;
+    pageMode?: PageMode;
+    duplex?: boolean;
+    rotateCover?: boolean;
+    rotateInner?: boolean;
+    rotateImported?: boolean;
+  }>;
+};
+type ManagedTemplate = {
+  id: string;
+  organizationId: string;
+  name: string;
+  fileName: string;
+  fileUrl: string;
+  foregroundUrl?: string;
+  regions?: TemplateRegions;
+  hasCover?: boolean;
+  pageCount?: number;
+  pageMode?: PageMode;
+  duplex?: boolean;
+  rotateCover?: boolean;
+  rotateInner?: boolean;
+};
+type Filter = 'all' | OrderStatus | 'unmatched' | 'missing-template';
 
-const months=['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
-const pdfJsModuleUrl='/vendor/pdfjs/pdf.mjs?v=6.2.108';
-const pdfWorkerUrl='/vendor/pdfjs/pdf.worker.compat.mjs?v=6.2.108-compat1';
-const initialTransform:Transform={scale:1,x:0,y:0,rotation:0};
-const MIN_IMAGE_SCALE=.5,MAX_IMAGE_SCALE=5,MIN_IMAGE_OFFSET=-80,MAX_IMAGE_OFFSET=80,SNAP_TOLERANCE=5;
-let activeTemplatePageSize:PageSize={width:595.276,height:841.89};
-let activeTemplatePreviewProgress=0;
-const defaultRegions:TemplateRegions={cover:{x:4.4,y:3.1,width:91.2,height:61.4,curve:0,points:[{x:4.4,y:3.1},{x:95.6,y:3.1},{x:95.6,y:64.5},{x:4.4,y:64.5}]},inner:{x:4.4,y:3.1,width:91.2,height:50.5,curve:0,points:[{x:4.4,y:3.1},{x:95.6,y:3.1},{x:95.6,y:53.2},{x:88,y:53.5},{x:78,y:51.8},{x:68,y:49.3},{x:58,y:46.8},{x:50,y:45.8},{x:42,y:46.2},{x:32,y:47.8},{x:22,y:49.8},{x:12,y:51.8},{x:4.4,y:53.2}]}};
+const months = [
+  '一月',
+  '二月',
+  '三月',
+  '四月',
+  '五月',
+  '六月',
+  '七月',
+  '八月',
+  '九月',
+  '十月',
+  '十一月',
+  '十二月'
+];
+const pdfJsModuleUrl = '/vendor/pdfjs/pdf.mjs?v=6.2.108';
+const pdfWorkerUrl = '/vendor/pdfjs/pdf.worker.compat.mjs?v=6.2.108-compat1';
+const initialTransform: Transform = {scale: 1, x: 0, y: 0, rotation: 0};
+const MIN_IMAGE_SCALE = 0.5,
+  MAX_IMAGE_SCALE = 5,
+  MIN_IMAGE_OFFSET = -80,
+  MAX_IMAGE_OFFSET = 80,
+  SNAP_TOLERANCE = 5;
+let activeTemplatePageSize: PageSize = {width: 595.276, height: 841.89};
+let activeTemplatePreviewProgress = 0;
+const defaultRegions: TemplateRegions = {
+  cover: {
+    x: 4.4,
+    y: 3.1,
+    width: 91.2,
+    height: 61.4,
+    curve: 0,
+    points: [
+      {x: 4.4, y: 3.1},
+      {x: 95.6, y: 3.1},
+      {x: 95.6, y: 64.5},
+      {x: 4.4, y: 64.5}
+    ]
+  },
+  inner: {
+    x: 4.4,
+    y: 3.1,
+    width: 91.2,
+    height: 50.5,
+    curve: 0,
+    points: [
+      {x: 4.4, y: 3.1},
+      {x: 95.6, y: 3.1},
+      {x: 95.6, y: 53.2},
+      {x: 88, y: 53.5},
+      {x: 78, y: 51.8},
+      {x: 68, y: 49.3},
+      {x: 58, y: 46.8},
+      {x: 50, y: 45.8},
+      {x: 42, y: 46.2},
+      {x: 32, y: 47.8},
+      {x: 22, y: 49.8},
+      {x: 12, y: 51.8},
+      {x: 4.4, y: 53.2}
+    ]
+  }
+};
 
-function ensureMapUpsertCompatibility(){const prototype=Map.prototype as Map<unknown,unknown>&{getOrInsert?:(key:unknown,value:unknown)=>unknown;getOrInsertComputed?:(key:unknown,callback:(key:unknown)=>unknown)=>unknown};if(typeof prototype.getOrInsert!=='function')Object.defineProperty(prototype,'getOrInsert',{value:function(this:Map<unknown,unknown>,key:unknown,value:unknown){if(this.has(key))return this.get(key);this.set(key,value);return value;},configurable:true,writable:true});if(typeof prototype.getOrInsertComputed!=='function')Object.defineProperty(prototype,'getOrInsertComputed',{value:function(this:Map<unknown,unknown>,key:unknown,callback:(key:unknown)=>unknown){if(this.has(key))return this.get(key);const value=callback(key);this.set(key,value);return value;},configurable:true,writable:true});}
-function shuffle<T>(items:T[]){const result=[...items];for(let i=result.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[result[i],result[j]]=[result[j],result[i]];}return result;}
-async function loadPdfJs(){ensureMapUpsertCompatibility();if(import.meta.env.DEV)return import('pdfjs-dist');return import(/* @vite-ignore */ pdfJsModuleUrl) as Promise<typeof import('pdfjs-dist')>;}
-function arrange(photos:Photo[]){if(!photos.length)return[];const result:Photo[]=[];let previous='';while(result.length<12){let round=shuffle(photos);if(round.length>1&&round[0].id===previous)[round[0],round[1]]=[round[1],round[0]];round=round.slice(0,12-result.length);result.push(...round);previous=result.at(-1)?.id??'';}return result;}
-function arrangeInSequence(photos:Photo[]){const fixed=photos.slice(0,12);return[...fixed,...arrange(photos).slice(0,12-fixed.length)];}
-function safeName(value:string){return value.replace(/[\\/:*?"<>|]/g,'-').trim();}
-const code128Patterns=['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213','221312','231212','112232','122132','122231','113222','123122','123221','223211','221132','221231','213212','223112','312131','311222','321122','321221','312212','322112','322211','212123','212321','232121','111323','131123','131321','112313','132113','132311','211313','231113','231311','112133','112331','132131','113123','113321','133121','313121','211331','231131','213113','213311','213131','311123','311321','331121','312113','312311','332111','314111','221411','431111','111224','111422','121124','121421','141122','141221','112214','112412','122114','122411','142112','142211','241211','221114','413111','241112','134111','111242','121142','121241','114212','124112','124211','411212','421112','421211','212141','214121','412121','111143','111341','131141','114113','114311','411113','411311','113141','114131','311141','411131','211412','211214','211232','2331112'];
-function barcodeValue(value:string){const ascii=Array.from(value).filter(char=>{const code=char.charCodeAt(0);return code>=32&&code<=126}).join('');return ascii||'ORDER';}
-function drawCode128(context:CanvasRenderingContext2D,value:string,x:number,y:number,width:number,height:number){const text=barcodeValue(value),codes=Array.from(text,char=>char.charCodeAt(0)-32),checksum=(104+codes.reduce((sum,code,index)=>sum+code*(index+1),0))%103,patterns=[code128Patterns[104],...codes.map(code=>code128Patterns[code]),code128Patterns[checksum],code128Patterns[106]],modules=patterns.reduce((sum,pattern)=>sum+Array.from(pattern).reduce((total,digit)=>total+Number(digit),0),0)+20,moduleWidth=width/modules;let cursor=x+10*moduleWidth;context.fillStyle='#111';for(const pattern of patterns){Array.from(pattern).forEach((digit,index)=>{const part=Number(digit)*moduleWidth;if(index%2===0)context.fillRect(cursor,y,Math.ceil(part),height);cursor+=part;});}}
-function orderInfoCanvas(orderNumber:string,warehouse='',width=1240,height=1754){const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const context=canvas.getContext('2d');if(!context)throw new Error('无法生成订单信息页');context.fillStyle='#fff';context.fillRect(0,0,width,height);context.strokeStyle='#111';context.lineWidth=Math.max(2,width*.002);context.strokeRect(width*.07,height*.06,width*.86,height*.88);context.textAlign='center';context.fillStyle='#111';context.font=`700 ${Math.round(width*.055)}px sans-serif`;context.fillText('订单信息',width/2,height*.2);context.font=`500 ${Math.round(width*.025)}px sans-serif`;context.fillStyle='#666';context.fillText('ORDER INFORMATION',width/2,height*.245);context.fillStyle='#111';context.font=`700 ${Math.round(width*.052)}px sans-serif`;context.fillText(orderNumber,width/2,height*.39,width*.78);context.font=`600 ${Math.round(width*.027)}px sans-serif`;context.fillText(`收货仓库：${warehouse||'未提供'}`,width/2,height*.48,width*.78);drawCode128(context,orderNumber,width*.33,height*.57,width*.34,height*.08);context.font=`500 ${Math.round(width*.018)}px monospace`;context.fillText(barcodeValue(orderNumber),width/2,height*.69,width*.42);context.font=`500 ${Math.round(width*.018)}px sans-serif`;context.fillStyle='#777';const generatedDate=new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());context.fillText(`生成日期：${generatedDate}`,width/2,height*.88);return canvas;}
-function regionPoints(region:TemplateRegions['inner']):Point[]{return region.points?.length?region.points:[{x:region.x,y:region.y},{x:region.x+region.width,y:region.y},{x:region.x+region.width,y:region.y+region.height},{x:region.x,y:region.y+region.height}];}
-function control(point:Point,kind:'in'|'out'){return{x:point[`${kind}X`]??point.x,y:point[`${kind}Y`]??point.y};}
-function sampledRegion(region:TemplateRegions['inner']){const points=regionPoints(region);if(points.length<2)return points;const sampled:Point[]=[];for(let index=0;index<points.length;index++){const a=points[index],b=points[(index+1)%points.length],out=control(a,'out'),inside=control(b,'in'),curved=Math.hypot(out.x-a.x,out.y-a.y)>.001||Math.hypot(inside.x-b.x,inside.y-b.y)>.001,steps=curved?48:1;for(let step=0;step<steps;step++){const t=step/steps,u=1-t;sampled.push({x:u*u*u*a.x+3*u*u*t*out.x+3*u*t*t*inside.x+t*t*t*b.x,y:u*u*u*a.y+3*u*u*t*out.y+3*u*t*t*inside.y+t*t*t*b.y});}}return sampled;}
-function regionBounds(region:TemplateRegions['inner']){const points=sampledRegion(region),xs=points.map(point=>point.x),ys=points.map(point=>point.y),x=Math.min(...xs),y=Math.min(...ys),right=Math.max(...xs),bottom=Math.max(...ys);return{x,y,width:right-x,height:bottom-y};}
-function regionClip(region:TemplateRegions['inner']){const bounds=regionBounds(region);return`polygon(${sampledRegion(region).map(point=>`${(point.x-bounds.x)/bounds.width*100}% ${(point.y-bounds.y)/bounds.height*100}%`).join(',')})`;}
-async function suitableScale(file:File,region:TemplateRegions['cover'],pageSize:PageSize){const bitmap=await createImageBitmap(file,{imageOrientation:'from-image'}),bounds=regionBounds(region),targetWidth=pageSize.width*bounds.width/100,targetHeight=pageSize.height*bounds.height/100,containScale=Math.min(targetWidth/bitmap.width,targetHeight/bitmap.height),displayWidth=bitmap.width*containScale,displayHeight=bitmap.height*containScale,coverScale=Math.max(targetWidth/displayWidth,targetHeight/displayHeight);bitmap.close();return Math.min(MAX_IMAGE_SCALE,Math.max(MIN_IMAGE_SCALE,coverScale));}
-function anchoredCoverTransform(area:DOMRect,image:HTMLImageElement,clientX:number,clientY:number,transform:Transform,effectiveRotation:number):Transform{const width=area.width,height=area.height,imageAspect=(image.naturalWidth||1)/(image.naturalHeight||1),areaAspect=width/height,baseWidth=imageAspect>=areaAspect?width:imageAspect*height,baseHeight=imageAspect>=areaAspect?width/imageAspect:height,left=-baseWidth/2,right=baseWidth/2,top=-baseHeight/2,bottom=baseHeight/2,angle=effectiveRotation*Math.PI/180,cos=Math.cos(angle),sin=Math.sin(angle),scale=Math.max(.001,transform.scale),translatedX=clientX-(area.left+width/2)-width*transform.x/100,translatedY=clientY-(area.top+height/2)-height*transform.y/100,anchorX=(cos*translatedX+sin*translatedY)/scale,anchorY=(-sin*translatedX+cos*translatedY)/scale,corners=[[-width/2,-height/2],[width/2,-height/2],[width/2,height/2],[-width/2,height/2]],requirements=[MIN_IMAGE_SCALE];for(const [cornerX,cornerY] of corners){const localX=cos*cornerX+sin*cornerY,localY=-sin*cornerX+cos*cornerY;requirements.push(localX>=0?localX/Math.max(.001,right-anchorX):-localX/Math.max(.001,anchorX-left),localY>=0?localY/Math.max(.001,bottom-anchorY):-localY/Math.max(.001,anchorY-top));}const nextScale=Math.min(MAX_IMAGE_SCALE,Math.max(transform.scale,...requirements)*1.005),rotatedAnchorX=cos*anchorX-sin*anchorY,rotatedAnchorY=sin*anchorX+cos*anchorY,nextX=Math.max(MIN_IMAGE_OFFSET,Math.min(MAX_IMAGE_OFFSET,-nextScale*rotatedAnchorX/width*100)),nextY=Math.max(MIN_IMAGE_OFFSET,Math.min(MAX_IMAGE_OFFSET,-nextScale*rotatedAnchorY/height*100));return{...transform,scale:nextScale,x:nextX,y:nextY};}
-function sequenceOf(name:string){const match=name.match(/消费者上传原图[^\d]*(\d+)(?=[^\d]*\.[^.]+$)/);return match?Number(match[1]):null;}
-function normalized(value:string){return value.trim().toLowerCase();}
-function templatePageNumbers(pageCount:number,hasCover:boolean,pageMode:PageMode){const cover=hasCover?[1]:[],candidates=Array.from({length:pageCount},(_,index)=>index+1).filter(page=>!hasCover||page!==1).filter(page=>pageMode==='all'||(pageMode==='odd'?page%2===1:page%2===0));return[...cover,...candidates];}
-function matchingTemplate(templates:TemplateRecord[],sku?:string){if(!sku)return undefined;const key=normalized(sku);return templates.find(item=>item.source==='custom'&&normalized(item.name.replace(/\.pdf$/i,''))===key)??templates.find(item=>item.source==='default'&&normalized(item.name.replace(/\.pdf$/i,''))===key);}
-async function parseOrderWorkbook(file:File){const JSZip=(await import('jszip')).default,zip=await JSZip.loadAsync(file),sharedEntry=zip.file('xl/sharedStrings.xml'),shared:string[]=[];if(sharedEntry){const document=new DOMParser().parseFromString(await sharedEntry.async('text'),'application/xml');document.querySelectorAll('si').forEach(item=>shared.push(Array.from(item.querySelectorAll('t')).map(node=>node.textContent??'').join('')));}const sheetEntry=zip.file(/^xl\/worksheets\/sheet\d+\.xml$/).sort((a,b)=>a.name.localeCompare(b.name))[0];if(!sheetEntry)throw new Error('Excel 中没有可读取的工作表');const document=new DOMParser().parseFromString(await sheetEntry.async('text'),'application/xml'),rows:string[][]=[];document.querySelectorAll('sheetData row').forEach(row=>{const values:string[]=[];row.querySelectorAll('c').forEach(cell=>{const reference=cell.getAttribute('r')??'',letters=reference.match(/[A-Z]+/)?.[0]??'A';let column=0;for(const letter of letters)column=column*26+letter.charCodeAt(0)-64;column--;const type=cell.getAttribute('t'),raw=cell.querySelector('v')?.textContent??'',inline=Array.from(cell.querySelectorAll('is t')).map(node=>node.textContent??'').join('');values[column]=type==='s'?shared[Number(raw)]??'':type==='inlineStr'?inline:raw;});rows.push(values);});const headerIndex=rows.findIndex(row=>['SKU货号','定制ID','收货仓库'].every(header=>row.includes(header))&&row.some(header=>header==='发货数'||header==='发货数量'));if(headerIndex<0)throw new Error('Excel 缺少“SKU货号、定制ID、收货仓库、发货数”表头');const headers=rows[headerIndex],skuIndex=headers.indexOf('SKU货号'),idIndex=headers.indexOf('定制ID'),warehouseIndex=headers.indexOf('收货仓库'),quantityIndex=Math.max(headers.indexOf('发货数'),headers.indexOf('发货数量'));return rows.slice(headerIndex+1).map(row=>({customId:String(row[idIndex]??'').trim(),sku:String(row[skuIndex]??'').trim(),warehouse:String(row[warehouseIndex]??'').trim(),quantity:Math.max(1,Math.floor(Number(row[quantityIndex])||1))})).filter(row=>row.customId);}
-async function fetchPdfFile(url:string,name:string,onProgress?:(percent:number)=>void){const response=await fetch(url,{cache:'no-store'});if(!response.ok)throw new Error(`模板文件读取失败：${name}`);const total=Number(response.headers.get('content-length'))||0,reader=response.body?.getReader();if(!reader){onProgress?.(100);return new File([await response.blob()],name,{type:'application/pdf'});}const chunks:Uint8Array[]=[];let received=0;while(true){const {done,value}=await reader.read();if(done)break;if(value){chunks.push(value);received+=value.byteLength;if(total)onProgress?.(Math.min(99,Math.round(received/total*100)));}}onProgress?.(100);return new File(chunks,name,{type:'application/pdf'});}
-function managedTemplateRecord(item:ManagedTemplate):TemplateRecord{return{id:item.id,organizationId:item.organizationId,name:item.name,fileUrl:item.fileUrl,fileName:item.fileName,foregroundUrl:item.foregroundUrl,source:'custom' as const,regions:item.regions,hasCover:item.hasCover,pageCount:item.pageCount,pageMode:item.pageMode,duplex:item.duplex,rotateCover:item.rotateCover,rotateInner:item.rotateInner};}
-async function uploadManagedTemplate(organizationId:string,file:File,name=file.name.replace(/\.pdf$/i,''),metadata:Record<string,unknown>={},foregroundFile?:File){const form=new FormData();form.set('organizationId',organizationId);form.set('name',name);form.set('file',file);form.set('metadata',JSON.stringify(metadata));if(foregroundFile)form.set('foregroundFile',foregroundFile);const response=await fetch('/api/templates',{method:'POST',body:form});const data=await response.json().catch(()=>({})) as {template?:ManagedTemplate;error?:string;hint?:string};if(!response.ok||!data.template){const message=[data.error??'模板上传失败',data.hint].filter(Boolean).join('\n');window.alert(message);throw new Error(message);}return{...managedTemplateRecord(data.template),file,foregroundFile};}
-async function saveTemplates(organizationId:string,files:File[]){return Promise.all(files.map(file=>uploadManagedTemplate(organizationId,file)));}
-async function saveForeground(templateId:string,file:File){const form=new FormData();form.set('file',file);const response=await fetch(`/api/templates/${templateId}/foreground`,{method:'POST',body:form});if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error??'前景保护层上传失败');}}
-async function loadForeground(templateId:string){const response=await fetch(`/api/templates/${templateId}/foreground`,{cache:'no-store'});return response.ok?new File([await response.blob()],`${templateId}-foreground.pdf`,{type:'application/pdf'}):undefined;}
-async function loadTemplates(){const response=await fetch('/api/templates',{cache:'no-store'});if(!response.ok)return[];const data=await response.json() as {templates:ManagedTemplate[]};return data.templates.map(managedTemplateRecord);}
-async function loadDefaultTemplates(){const response=await fetch('/default-template.zip');if(!response.ok)throw new Error('内置模板加载失败');const JSZip=(await import('jszip')).default,zip=await JSZip.loadAsync(await response.arrayBuffer()),manifestFile=zip.file('jht-config.json');if(!manifestFile)throw new Error('内置模板配置无效');const manifest=JSON.parse(await manifestFile.async('text')) as TemplateManifest;if(manifest.format!=='JHT-ISP-CONFIG'||!Array.isArray(manifest.templates))throw new Error('内置模板配置格式不正确');const hidden=new Set<string>(JSON.parse(localStorage.getItem('jht-hidden-default-templates')??'[]')),templates:TemplateRecord[]=[];for(const item of manifest.templates){if(hidden.has(item.id))continue;const entry=zip.file(item.path);if(!entry)throw new Error(`内置模板缺少文件：${item.name}`);const file=new File([await entry.async('blob')],item.id,{type:'application/pdf'}),foregroundEntry=item.foregroundPath?zip.file(item.foregroundPath):null,foregroundFile=foregroundEntry?new File([await foregroundEntry.async('blob')],`${item.id}-foreground.pdf`,{type:'application/pdf'}):undefined;templates.push({id:`default:${item.id}`,name:item.name,file,foregroundFile,source:'default',regions:item.regions??defaultRegions,hasCover:item.hasCover!==false,pageCount:item.pageCount,pageMode:item.pageMode,duplex:item.duplex,rotateCover:item.rotateCover,rotateInner:item.rotateInner});}return templates;}
-async function deleteStoredTemplate(id:string){const response=await fetch(`/api/templates/${id}`,{method:'DELETE'});if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error??'模板删除失败');}}
-async function clearStoredTemplates(){const custom=await loadTemplates();await Promise.all(custom.map(item=>deleteStoredTemplate(item.id)));}
-async function optimizedJpeg(file:File,width:number,height:number,transform:Transform){const bitmap=await createImageBitmap(file,{imageOrientation:'from-image'}),canvas=document.createElement('canvas');canvas.width=Math.round(width);canvas.height=Math.round(height);const context=canvas.getContext('2d',{alpha:false});if(!context)throw new Error('无法处理图片');context.fillStyle='#fff';context.fillRect(0,0,canvas.width,canvas.height);const baseScale=Math.min(canvas.width/bitmap.width,canvas.height/bitmap.height),w=bitmap.width*baseScale*transform.scale,h=bitmap.height*baseScale*transform.scale;context.save();context.translate(canvas.width/2+canvas.width*transform.x/100,canvas.height/2+canvas.height*transform.y/100);context.rotate((transform.rotation??0)*Math.PI/180);context.drawImage(bitmap,-w/2,-h/2,w,h);context.restore();bitmap.close();const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('图片压缩失败')),'image/jpeg',.9));return new Uint8Array(await blob.arrayBuffer());}
-
-type SnapGuides={page:number;vertical?:'left'|'center'|'right';horizontal?:'top'|'center'|'bottom'};
-function PageVisual({templateUrl,photo,transform,region,label,pageSize,rotateImported=false,foregroundPages=[],showBounds=false,snapGuides,onResizeStart}: {templateUrl?:string;photo:Photo;transform:Transform;region:TemplateRegions['cover'];label:string;pageSize?:PageSize;rotateImported?:boolean;foregroundPages?:string[];showBounds?:boolean;snapGuides?:SnapGuides;onResizeStart?:(event:ReactPointerEvent<HTMLSpanElement>)=>void}){const bounds=regionBounds(region),index=label==='封面'?0:Math.max(0,months.indexOf(label)+(foregroundPages.length>12?1:0)),foregroundUrl=foregroundPages[index],[imageSize,setImageSize]=useState({width:1,height:1}),size=pageSize??activeTemplatePageSize,regionAspect=(size.width*bounds.width)/(size.height*bounds.height),imageAspect=imageSize.width/imageSize.height,box=imageAspect>=regionAspect?{width:100,height:regionAspect/imageAspect*100,left:0,top:(100-regionAspect/imageAspect*100)/2}:{width:imageAspect/regionAspect*100,height:100,left:(100-imageAspect/regionAspect*100)/2,top:0};return <div className="a4-page" style={{aspectRatio:`${size.width} / ${size.height}`}}>{templateUrl?<img className="template-page" src={templateUrl} alt={`${label}模板`}/>:<div className="page-loading">模板加载中</div>}<div className="custom-photo" style={{left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,clipPath:regionClip(region)}}><div className="photo-transform-layer" style={{transform:`translate(${transform.x}%,${transform.y}%) scale(${transform.scale}) rotate(${(transform.rotation??0)+(rotateImported?180:0)}deg)`}}><img src={photo.url} alt={photo.file.name} onLoad={event=>setImageSize({width:event.currentTarget.naturalWidth||1,height:event.currentTarget.naturalHeight||1})}/>{showBounds&&<span className="image-bounds" data-image-bounds="true" style={{left:`${box.left}%`,top:`${box.top}%`,width:`${box.width}%`,height:`${box.height}%`}}>{['nw','n','ne','e','se','s','sw','w'].map(handle=><i key={handle} className={`bound-handle ${handle}`} onPointerDown={handle.length===2?onResizeStart:undefined}/>)}</span>}</div>{snapGuides?.vertical&&<span className={`snap-guide vertical ${snapGuides.vertical}`}/>} {snapGuides?.horizontal&&<span className={`snap-guide horizontal ${snapGuides.horizontal}`}/>}</div>{foregroundUrl&&<img className="foreground-page" src={foregroundUrl} alt={`${label}前景保护层`}/>}</div>}
-
-function TemplateLayerPreview({backgroundUrl,foregroundUrl,region,label,pageSize,progress=activeTemplatePreviewProgress}:{backgroundUrl?:string;foregroundUrl?:string;region:TemplateRegions['cover'];label:string;pageSize?:PageSize;progress?:number}){const bounds=regionBounds(region),size=pageSize??activeTemplatePageSize,visibleBackground=progress>=100?backgroundUrl:undefined;return <figure className="template-layer-figure"><div className="template-cover-preview layered-template-preview" style={{aspectRatio:`${size.width} / ${size.height}`}}>{visibleBackground?<img className="layer-background" src={visibleBackground} alt={`${label}背景`}/>:<div className="template-preview-loading"><span>正在加载… {progress}%</span><i><b style={{width:`${progress}%`}}/></i></div>}{visibleBackground&&<div className="region-inspection-fill" style={{left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,clipPath:regionClip(region)}} aria-label={`${label}实际填充区域`}/>} {visibleBackground&&foregroundUrl&&<img className="layer-foreground" src={foregroundUrl} alt={`${label}前景保护层`}/>}</div><figcaption>{label}<span className={foregroundUrl?'foreground-status enabled':'foreground-status'}>{foregroundUrl?'已叠加前景保护':'无前景保护'}</span></figcaption></figure>}
-
-function MissingTemplateDialog({names,onClose,onCopied}:{names:string[];onClose:()=>void;onCopied:(count:number)=>void}){const content=names.join('\n');const copyAll=async()=>{try{await navigator.clipboard.writeText(content);onCopied(names.length);}catch{window.prompt('请复制以下缺少模板名称',content);}};return <div className="missing-template-backdrop" onClick={onClose}><section className="missing-template-dialog" role="dialog" aria-modal="true" aria-label="缺少模板列表" onClick={event=>event.stopPropagation()}><header><div><b>缺少模板</b><span>共 {names.length} 个 SKU</span></div><button onClick={onClose} aria-label="关闭">×</button></header>{names.length?<><textarea readOnly value={content} aria-label="缺少模板名称"/><footer><small>可以直接选择上方文字复制</small><button onClick={copyAll}>复制全部</button></footer></>:<p>当前没有缺少的模板。</p>}</section></div>}
-function TemplateExportDialog({templates,selected,onChange,onClose,onConfirm,busy}:{templates:TemplateRecord[];selected:Set<string>;onChange:(ids:Set<string>)=>void;onClose:()=>void;onConfirm:()=>void;busy:boolean}){const allSelected=templates.length>0&&selected.size===templates.length;return <div className="template-export-backdrop" onClick={onClose}><section className="template-export-dialog" role="dialog" aria-modal="true" aria-label="选择导出的模板" onClick={event=>event.stopPropagation()}><header><div><b>选择导出模板</b><span>已选择 {selected.size} / {templates.length}</span></div><button onClick={onClose} aria-label="关闭">×</button></header><div className="template-export-actions"><button onClick={()=>onChange(new Set(templates.map(item=>item.id)))}>全选</button><button onClick={()=>onChange(new Set())}>取消全选</button></div><div className="template-export-list">{templates.map(item=><label key={item.id}><input type="checkbox" checked={selected.has(item.id)} onChange={event=>{const next=new Set(selected);if(event.target.checked)next.add(item.id);else next.delete(item.id);onChange(next);}}/><span><b>{item.name.replace(/\.pdf$/i,'')}</b><small>{item.source==='default'?'内置模板':'自定义模板'}</small></span></label>)}</div><footer><label><input type="checkbox" checked={allSelected} onChange={event=>onChange(event.target.checked?new Set(templates.map(item=>item.id)):new Set())}/>全选全部模板</label><div><button onClick={onClose}>取消</button><button className="confirm" disabled={!selected.size||busy} onClick={onConfirm}>{busy?'正在导出…':`导出所选（${selected.size}）`}</button></div></footer></section></div>}
-function OrderInfoVisual({orderNumber,warehouse,pageSize={width:595.276,height:841.89}}:{orderNumber:string;warehouse?:string;pageSize?:PageSize}){const ref=useRef<HTMLCanvasElement>(null);useEffect(()=>{const source=orderInfoCanvas(orderNumber,warehouse,Math.round(pageSize.width*2),Math.round(pageSize.height*2)),canvas=ref.current,context=canvas?.getContext('2d');if(!canvas||!context)return;canvas.width=source.width;canvas.height=source.height;context.drawImage(source,0,0);},[orderNumber,warehouse,pageSize.width,pageSize.height]);return <div className="a4-page order-info-page" style={{aspectRatio:`${pageSize.width}/${pageSize.height}`}}><canvas ref={ref} aria-label={`订单信息：${orderNumber}`}/></div>}
-function UpdateLog(){return <main className="update-log-page with-sidebar"><header className="system-bar page-topbar"><div className="page-heading"><b>更新日志</b><span>系统功能变更与操作要点</span></div></header><section className="update-log-content"><article><time>2026-08-30</time><div><h2>模板轮廓导入与查找优化</h2><ul><li>SVG 轮廓导入新增 circle 与 ellipse 支持，圆形和椭圆自动转换为可编辑贝塞尔曲线。</li><li>提高曲线预览采样精度并移除圆角边缘的白色内描边，改善模板列表中的圆角显示。</li><li>模板列表增加名称搜索和匹配数量显示，便于快速定位大量模板。</li><li>模板管理预览降低为适度清晰的轻量分辨率，并增加下载、解析和渲染进度条；最终 PDF 仍使用原始文件生成。</li><li>新导入图片默认等比覆盖定制区域；右键可将点击位置设为中心并自动补足缩放，同时修复本地开发环境无法加载 PDF.js 模板的问题。</li></ul></div></article><article><time>2026-08-29</time><div><h2>图片位移范围扩展</h2><ul><li>图片左右和上下偏移范围从 -50～50 扩展为 -80～80。</li><li>普通调整栏、放大调整窗口、鼠标拖动和键盘移动统一使用新的范围限制。</li></ul></div></article><article><time>2026-08-28</time><div><h2>横版模板、存储与 SVG 兼容</h2><ul><li>模板管理只优先渲染封面和内页示例，提升模板切换速度；左侧模板列表改为独立滚动。</li><li>修复远端更新后 PDF.js 动态文件哈希失效导致全部模板停在“正在加载”的问题。</li><li>横版 PDF 自动读取真实页面尺寸，预览、模板绘制、图片调整和最终导出统一适配横向版面。</li><li>模板与前景保护层预览改为 2 倍分辨率 PNG，改善放大后的文字和细线清晰度。</li><li>本地 Worker 开发环境增加数据库模板存储，远程已有 COS 配置继续自动使用，无需重新配置。</li><li>修复模板管理预览固定高度覆盖横版比例的问题，并放大横版双页预览。</li><li>导入带 rx/ry 参数的 SVG 圆角矩形时，自动生成对应的贝塞尔曲线控制柄。</li><li>保留圆角轮廓的缩放与位移变换，避免导入后退化为普通直角矩形。</li></ul></div></article><article><time>2026-08-27</time><div><h2>图片精细调整与批次存档</h2><ul><li>图片缩放范围扩展为0.5–5，增加居中与边缘吸附、定界框和等比缩放手柄。</li><li>订单文件夹支持累积导入，同名订单自动跳过并保留已有调整。</li><li>增加手动批次存档，可新建、保存、打开、重命名和批量删除批次。</li><li>订单状态区分表格未匹配、模板待匹配和模板未匹配，并增加安全删除订单入口。</li><li>每次确认订单已排版后自动保存当前批次，降低刷新导致的数据丢失风险。</li><li>修复闭合 SVG 路径返回起点时丢失贝塞尔入方向手柄的问题。</li></ul></div></article><article><time>2026-08-25</time><div><h2>图片放大调整与模板绘制优化</h2><ul><li>放大页面支持拖动、滚轮缩放、Option/Alt+滚轮精细旋转和参数拖动条。</li><li>放大操作时并列显示合成预览图，PageUp/PageDown 可直接切换页面。</li><li>模板绘制增加撤销、放大十字光标、SVG 矩形与贝塞尔曲线支持。</li><li>订单文件夹可自动识别根目录中的 Excel 订单表格。</li></ul></div></article></section></main>}
-
-function Workshop(){
-  const {user,logout}=useAuth();
-  const [templateTargetOrganizationId,setTemplateTargetOrganizationId]=useState(user.organizationIds.includes('org_default')?'org_default':user.organizationIds[0]??'');
-  const [accountManagement,setAccountManagement]=useState(!user.permissions.includes('customization')&&!user.permissions.includes('templates')&&user.permissions.includes('accounts')),[changelogOpen,setChangelogOpen]=useState(false),[sidebarCollapsed,setSidebarCollapsed]=useState(false);
-  const [templates,setTemplates]=useState<TemplateRecord[]>([]),[selectedTemplateId,setSelectedTemplateId]=useState(''),[templatePages,setTemplatePages]=useState<string[]>([]),[allTemplatePages,setAllTemplatePages]=useState<string[]>([]),[templatePageCount,setTemplatePageCount]=useState(13),[templatePageSize,setTemplatePageSize]=useState<PageSize>({width:595.276,height:841.89}),[templatePreviewProgress,setTemplatePreviewProgress]=useState(0),[regions,setRegions]=useState<TemplateRegions>(defaultRegions),[hasCover,setHasCover]=useState(true),[pageMode,setPageMode]=useState<PageMode>('all'),[duplex,setDuplex]=useState(false),[rotateCover,setRotateCover]=useState(false),[rotateInner,setRotateInner]=useState(false),[includeOrderInfo,setIncludeOrderInfo]=useState(false),[showMissingTemplates,setShowMissingTemplates]=useState(false),[showTemplateExport,setShowTemplateExport]=useState(false),[exportTemplateIds,setExportTemplateIds]=useState<Set<string>>(new Set()),[editingTemplate,setEditingTemplate]=useState(false),[templateManagement,setTemplateManagement]=useState(!user.permissions.includes('customization')&&user.permissions.includes('templates')),[lightboxPage,setLightboxPage]=useState<number|null>(null),[previewLightbox,setPreviewLightbox]=useState(false),[awaitingNext,setAwaitingNext]=useState(false),[draggingPage,setDraggingPage]=useState<number|null>(null),[snapGuides,setSnapGuides]=useState<SnapGuides|null>(null),[orders,setOrders]=useState<Order[]>([]),[orderSheet,setOrderSheet]=useState<Record<string,OrderSheetRow>>({}),[selectedId,setSelectedId]=useState(''),[selectedPage,setSelectedPage]=useState(0),[search,setSearch]=useState(''),[templateSearch,setTemplateSearch]=useState(''),[filter,setFilter]=useState<Filter>('all'),[skuFilter,setSkuFilter]=useState('all'),[busy,setBusy]=useState(false),[templateBusyLabel,setTemplateBusyLabel]=useState(''),[progress,setProgress]=useState(''),[message,setMessage]=useState('请选择批量订单文件夹'),[batchArchives,setBatchArchives]=useState<BatchArchiveMeta[]>([]),[activeBatchId,setActiveBatchId]=useState(''),[activeBatchName,setActiveBatchName]=useState('未命名批次'),[batchSavedAt,setBatchSavedAt]=useState<number|null>(null),[batchDirty,setBatchDirty]=useState(false),[showBatchManager,setShowBatchManager]=useState(false),[checkedBatchIds,setCheckedBatchIds]=useState<Set<string>>(new Set());const urls=useRef<string[]>([]),invalidTemplateAlert=useRef(''),folderInput=useRef<HTMLInputElement>(null),dragState=useRef<{pointerId:number;orderId:string;photoId:string;page:number;clientX:number;clientY:number;x:number;y:number;regionRect:DOMRect;imageRect:DOMRect}|null>(null),resizeState=useRef<{pointerId:number;orderId:string;photoId:string;page:number;centerX:number;centerY:number;distance:number;scale:number}|null>(null),batchTracking=useRef(false);
-  activeTemplatePageSize=templatePageSize;
-  activeTemplatePreviewProgress=templatePreviewProgress;
-  const rotationDrag=useRef<{pointerId:number;startX:number;rotation:number}|null>(null);
-  const [foregroundFile,setForegroundFile]=useState<File|undefined>(),[foregroundPages,setForegroundPages]=useState<string[]>([]);
-  const rotateImported=rotateInner;
-  const selectedTemplate=templates.find(item=>item.id===selectedTemplateId),template=selectedTemplate?.file??null;
-  useEffect(()=>{document.documentElement.style.setProperty('--template-page-ratio',`${templatePageSize.width} / ${templatePageSize.height}`);return()=>document.documentElement.style.removeProperty('--template-page-ratio');},[templatePageSize.width,templatePageSize.height]);
-  useEffect(()=>{let cancelled=false;(async()=>{const file=selectedTemplate?.foregroundFile??(selectedTemplate?.source==='custom'?await loadForeground(selectedTemplate.id):undefined);if(!cancelled)setForegroundFile(file);})();return()=>{cancelled=true};},[selectedTemplateId,selectedTemplate]);
-  useEffect(()=>{const handler=async(event:Event)=>{const file=(event as CustomEvent<File>).detail;if(!selectedTemplateId||!file)return;if(selectedTemplate?.source==='custom')await saveForeground(selectedTemplateId,file);setForegroundFile(file);setTemplates(current=>current.map(item=>item.id===selectedTemplateId?{...item,foregroundFile:file,foregroundUrl:`/api/templates/${item.id}/foreground`}:item));setMessage(`已为模板“${selectedTemplate?.name.replace(/\.pdf$/i,'')??''}”设置前景保护层`);};window.addEventListener('jht-foreground-file',handler);return()=>window.removeEventListener('jht-foreground-file',handler);},[selectedTemplateId,selectedTemplate]);
-  useEffect(()=>{if(!foregroundFile){setForegroundPages([]);return;}let cancelled=false;(async()=>{try{const pdfjs=await loadPdfJs();pdfjs.GlobalWorkerOptions.workerSrc=pdfWorkerUrl;const pdfDocument=await pdfjs.getDocument({data:new Uint8Array(await foregroundFile.arrayBuffer())}).promise;if(pdfDocument.numPages!==templatePageCount)throw new Error(`前景保护层页数 ${pdfDocument.numPages} 与背景模板 ${templatePageCount} 不一致`);const pageNumbers=templatePageNumbers(templatePageCount,hasCover,pageMode),previewPageNumbers=templateManagement?pageNumbers.slice(0,hasCover?2:1):pageNumbers,renderedPages=new Map<number,string>();for(const pageNumber of previewPageNumbers){const page=await pdfDocument.getPage(pageNumber),viewport=page.getViewport({scale:templateManagement?1.2:2}),canvas=document.createElement('canvas'),context=canvas.getContext('2d');canvas.width=viewport.width;canvas.height=viewport.height;if(context)await page.render({canvas,canvasContext:context,viewport,background:'rgba(0,0,0,0)'}).promise;renderedPages.set(pageNumber,canvas.toDataURL('image/png'));}if(!cancelled)setForegroundPages(pageNumbers.map(page=>renderedPages.get(page)??''));}catch(error){if(!cancelled){setForegroundPages([]);setMessage(error instanceof Error?error.message:'前景保护层预览失败');}}})();return()=>{cancelled=true};},[foregroundFile,templatePageCount,hasCover,pageMode,templateManagement]);
-  const selectedOrder=orders.find(order=>order.id===selectedId)??orders[0];
-  const pageOffset=hasCover?1:0;
-  const selectedPhoto=selectedOrder?(hasCover&&selectedPage===0?selectedOrder.cover:selectedOrder.arrangement[selectedPage-pageOffset]):undefined;
-  const selectedTransform=selectedPhoto&&selectedOrder?selectedOrder.transforms[selectedPhoto.id]??initialTransform:initialTransform;
-  const selectedRegion=hasCover&&selectedPage===0?regions.cover:regions.inner;
-  const templateBase=selectedTemplate?safeName(selectedTemplate.name.replace(/\.pdf$/i,'')):'template';
-  const readyCount=orders.filter(order=>order.status==='ready').length,pendingCount=orders.length-readyCount,shipmentCount=orders.filter(order=>order.sheetMatched).reduce((sum,order)=>sum+order.quantity,0),readyShipmentCount=orders.filter(order=>order.status==='ready').reduce((sum,order)=>sum+order.quantity,0),unmatchedCount=orders.filter(order=>!order.sheetMatched).length,missingTemplateOrders=orders.filter(order=>order.sheetMatched&&!matchingTemplate(templates,order.sku)),missingTemplateCount=missingTemplateOrders.length,missingTemplateNames=[...new Set(missingTemplateOrders.map(order=>order.sku||'SKU未提供'))];
-  const skuOptions=useMemo(()=>[...new Set(orders.map(order=>order.sku).filter((value):value is string=>Boolean(value)))].sort((a,b)=>a.localeCompare(b,'zh-CN')),[orders]);
-  const visibleOrders=useMemo(()=>orders.filter(order=>{const statusMatches=filter==='all'?true:filter==='unmatched'?!order.sheetMatched:filter==='missing-template'?Boolean(order.sheetMatched&&!matchingTemplate(templates,order.sku)):order.status===filter;return statusMatches&&(skuFilter==='all'||order.sku===skuFilter)&&order.name.toLowerCase().includes(search.toLowerCase());}),[orders,filter,skuFilter,search,templates]),visibleTemplates=useMemo(()=>{const key=normalized(templateSearch);return key?templates.filter(item=>normalized(item.name.replace(/\.pdf$/i,'')).includes(key)):templates;},[templates,templateSearch]),customTemplateCount=templates.filter(item=>item.source==='custom').length;
-  const duplicateCustomTemplate=(name:string,excludeId?:string,organizationId=templateTargetOrganizationId)=>templates.find(item=>item.source==='custom'&&item.id!==excludeId&&item.organizationId===organizationId&&normalized(item.name.replace(/\.pdf$/i,''))===normalized(name.replace(/\.pdf$/i,'')));
-  const warnDuplicateTemplate=(name:string)=>{const text=`自定义模板“${name.replace(/\.pdf$/i,'')}”已经存在，请使用其他名称。`;setMessage(text);window.alert(text);};
-
-  useEffect(()=>{(async()=>{try{const [defaults,custom]=await Promise.all([loadDefaultTemplates(),loadTemplates()]),items=[...defaults,...custom];setTemplates(items);setSelectedTemplateId(items[0]?.id??'');setMessage(items.length?`已加载 ${defaults.length} 个内置模板和 ${custom.length} 个可访问自定义模板`:'当前没有模板，可导入模板或稍后更新内置模板包');}catch(error){try{const custom=await loadTemplates();setTemplates(custom);setSelectedTemplateId(custom[0]?.id??'');}catch{}setMessage(error instanceof Error?error.message:'模板加载失败');}})();return()=>urls.current.forEach(URL.revokeObjectURL);},[]);
-  useEffect(()=>{listBatchArchives(String(user.id)).then(setBatchArchives).catch(error=>setMessage(error instanceof Error?error.message:'批次存档读取失败'));},[user.id]);
-  useEffect(()=>{if(!batchTracking.current){batchTracking.current=true;return;}setBatchDirty(true);},[orders,orderSheet,includeOrderInfo]);
-  useEffect(()=>{if(!selectedTemplateId||!selectedTemplate)return;setTemplatePreviewProgress(0);setRegions(selectedTemplate.regions??defaultRegions);setHasCover(selectedTemplate.hasCover!==false);setPageMode(selectedTemplate.pageMode??'all');setDuplex(selectedTemplate.duplex??[24,25].includes(selectedTemplate.pageCount??0));setRotateCover(selectedTemplate.rotateCover??false);setRotateInner(selectedTemplate.rotateInner??false);setSelectedPage(0);},[selectedTemplateId,selectedTemplate]);
-  useEffect(()=>{if(!selectedTemplate||selectedTemplate.file||!selectedTemplate.fileUrl)return;let cancelled=false;setTemplatePreviewProgress(1);(async()=>{try{const file=await fetchPdfFile(selectedTemplate.fileUrl!,selectedTemplate.fileName??selectedTemplate.name,percent=>{if(!cancelled)setTemplatePreviewProgress(Math.max(1,Math.round(percent*.4)));});if(!cancelled)setTemplates(current=>current.map(item=>item.id===selectedTemplate.id?{...item,file}:item));}catch(error){if(!cancelled){setTemplatePreviewProgress(0);setMessage(error instanceof Error?error.message:'模板文件读取失败');}}})();return()=>{cancelled=true};},[selectedTemplate]);
-  useEffect(()=>{if(!template){setTemplatePages([]);setAllTemplatePages([]);setTemplatePreviewProgress(0);return;}let cancelled=false;setTemplatePreviewProgress(current=>Math.max(42,current));(async()=>{try{const pdfjs=await loadPdfJs();pdfjs.GlobalWorkerOptions.workerSrc=pdfWorkerUrl;const pdfDocument=await pdfjs.getDocument({data:new Uint8Array(await template.arrayBuffer())}).promise,pageCount=pdfDocument.numPages;if(![12,13,24,25].includes(pageCount))throw new Error(`模板必须是12、13、24或25页，实际为 ${pageCount} 页`);const pageNumbers=templatePageNumbers(pageCount,hasCover,pageMode);if(!pageNumbers.length)throw new Error('当前模板参数没有可插图的页面');const allPages=Array<string>(pageCount).fill(''),renderPageNumbers=[...new Set(templateManagement?[1,...pageNumbers.slice(0,hasCover?2:1)]:[1,...pageNumbers])];let detectedPageSize:PageSize|undefined;for(const [renderIndex,pageNumber] of renderPageNumbers.entries()){const page=await pdfDocument.getPage(pageNumber),baseViewport=page.getViewport({scale:1}),viewport=page.getViewport({scale:templateManagement?1.2:2}),canvas=document.createElement('canvas'),context=canvas.getContext('2d');if(pageNumber===1)detectedPageSize={width:baseViewport.width,height:baseViewport.height};canvas.width=viewport.width;canvas.height=viewport.height;if(context)await page.render({canvas,canvasContext:context,viewport}).promise;allPages[pageNumber-1]=canvas.toDataURL('image/png');if(!cancelled)setTemplatePreviewProgress(45+Math.round((renderIndex+1)/renderPageNumbers.length*55));}if(!cancelled){setTemplatePageCount(pageCount);if(detectedPageSize)setTemplatePageSize(detectedPageSize);setTemplates(current=>current.some(item=>item.id===selectedTemplateId&&item.pageCount!==pageCount)?current.map(item=>item.id===selectedTemplateId?{...item,pageCount}:item):current);setAllTemplatePages(allPages);setTemplatePages(pageNumbers.map(pageNumber=>allPages[pageNumber-1]));setSelectedPage(0);setTemplatePreviewProgress(100);setMessage(`模板参数：${pageCount} 页 · ${detectedPageSize&&detectedPageSize.width>detectedPageSize.height?'横版':'竖版'} · ${hasCover?'有封面':'无封面'} · ${pageMode==='all'?'全部页面插图':pageMode==='odd'?'奇数页插图':'偶数页插图'}`);}}catch(error){if(!cancelled){setTemplatePages([]);setAllTemplatePages([]);setTemplatePreviewProgress(0);const errorMessage=error instanceof Error?error.message:'模板预览失败';setMessage(errorMessage);if(errorMessage.startsWith('模板必须是')){const alertKey=`${selectedTemplateId}:${errorMessage}`;if(invalidTemplateAlert.current!==alertKey){invalidTemplateAlert.current=alertKey;window.alert(`模板“${selectedTemplate?.name.replace(/\.pdf$/i,'')??'未命名模板'}”无法预览。\n\n${errorMessage}。\n请检查是否导入了正确的模板文件。`);}}}}})();return()=>{cancelled=true};},[template,selectedTemplateId,hasCover,pageMode,templateManagement]);
-  useEffect(()=>{if(!selectedOrder?.sku)return;const match=matchingTemplate(templates,selectedOrder.sku);if(match){if(match.id!==selectedTemplateId)setSelectedTemplateId(match.id);setMessage(`订单 ${selectedOrder.name} 已按 SKU 自动匹配${match.source==='custom'?'自定义':'内置'}模板：${match.name.replace(/\.pdf$/i,'')}`);}else setMessage(`订单 ${selectedOrder.name} 的 SKU“${selectedOrder.sku}”尚无对应模板`);},[selectedOrder?.id,selectedOrder?.sku]);
-
-  const addPhoto=(file:File):Photo=>{const url=URL.createObjectURL(file);urls.current.push(url);return{id:`${file.webkitRelativePath||file.name}-${file.size}-${crypto.randomUUID()}`,file,url};};
-  const importFolder=async(event:ChangeEvent<HTMLInputElement>)=>{const allFiles=Array.from(event.target.files??[]),workbook=allFiles.find(file=>/\.xlsx$/i.test(file.name)&&file.webkitRelativePath.split('/').filter(Boolean).length===2);let activeSheet=orderSheet;if(workbook){try{const rows=await parseOrderWorkbook(workbook);activeSheet=Object.fromEntries(rows.map(row=>[normalized(row.customId),row]));setOrderSheet(activeSheet);}catch(error){setMessage(error instanceof Error?`文件夹内订单表格解析失败：${error.message}`:'文件夹内订单表格解析失败');event.target.value='';return;}}const files=allFiles.filter(file=>file.type.startsWith('image/')||/\.(jpe?g|png|webp|heic)$/i.test(file.name)),groups=new Map<string,File[]>();for(const file of files){const parts=file.webkitRelativePath.split('/').filter(Boolean),name=parts.length>=3?parts[1]:parts[0]||'未命名订单';groups.set(name,[...(groups.get(name)??[]),file]);}const existingNames=new Set(orders.map(order=>normalized(order.name)));let invalid=0,duplicates=0;const next:Order[]=[...groups.entries()].sort(([a],[b])=>a.localeCompare(b,'zh-CN')).flatMap(([name,groupFiles])=>{if(existingNames.has(normalized(name))){duplicates++;return[];}const numbered=groupFiles.map(file=>({file,sequence:sequenceOf(file.name)})).filter((item):item is {file:File;sequence:number}=>item.sequence!==null).sort((a,b)=>a.sequence-b.sequence||a.file.name.localeCompare(b.file.name,'zh-CN')),coverFile=(hasCover?numbered.find(item=>item.sequence===1):numbered[0])?.file,insideFiles=(hasCover?numbered.filter(item=>item.sequence!==1):numbered).map(item=>item.file),previewFile=groupFiles.find(file=>/合成预览图/.test(file.name));if(!coverFile||!insideFiles.length){invalid++;return[];}const cover=addPhoto(coverFile),preview=previewFile?addPhoto(previewFile):undefined,photos=insideFiles.map(addPhoto),transforms:Record<string,Transform>={[cover.id]:initialTransform},sheet=activeSheet[normalized(name)];photos.forEach(photo=>transforms[photo.id]=initialTransform);return[{id:crypto.randomUUID(),name,cover,preview,photos,arrangement:arrangeInSequence(photos),transforms,status:'pending',sheetMatched:Boolean(sheet),sku:sheet?.sku||undefined,warehouse:sheet?.warehouse,quantity:sheet?.quantity??1}];});await Promise.all(next.map(async order=>{order.transforms[order.cover.id]={...initialTransform,scale:await suitableScale(order.cover.file,regions.cover,templatePageSize)};await Promise.all(order.photos.map(async photo=>{order.transforms[photo.id]={...initialTransform,scale:await suitableScale(photo.file,regions.inner,templatePageSize)};}));}));setOrders(current=>[...current.map(order=>{const sheet=activeSheet[normalized(order.name)];return sheet?{...order,sheetMatched:true,sku:sheet.sku||undefined,warehouse:sheet.warehouse,quantity:sheet.quantity}:order;}),...next]);if(next.length){setSelectedId(next[0].id);setSelectedPage(0);}const matched=next.filter(order=>order.sheetMatched).length,details=[`新增 ${next.length} 个订单`];if(duplicates)details.push(`跳过 ${duplicates} 个已存在的同名订单（原调整未覆盖）`);if(invalid)details.push(`跳过 ${invalid} 个缺少有效图片的文件夹`);if(Object.keys(activeSheet).length)details.push(`${workbook?'已自动读取订单表格，':''}新订单匹配 ${matched} 个`);setMessage(groups.size?details.join('；'):'没有找到符合“消费者上传原图+序号”的订单');event.target.value='';};
-  const importOrderSheet=async(event:ChangeEvent<HTMLInputElement>)=>{const file=event.target.files?.[0];event.target.value='';if(!file)return;setBusy(true);try{const rows=await parseOrderWorkbook(file),mapping=Object.fromEntries(rows.map(row=>[normalized(row.customId),row]));setOrderSheet(mapping);let matched=0;const nextOrders=orders.map(order=>{const row=mapping[normalized(order.name)];if(!row)return{...order,sheetMatched:false,sku:undefined,warehouse:undefined,quantity:1};matched++;return{...order,sheetMatched:true,sku:row.sku||undefined,warehouse:row.warehouse,quantity:row.quantity};});setOrders(nextOrders);const missingSkus=[...new Set(rows.map(row=>row.sku).filter(sku=>sku&&!matchingTemplate(templates,sku)))];setMessage(`已导入 ${rows.length} 条订单资料${orders.length?`，匹配当前订单 ${matched} 个`:''}${missingSkus.length?`；模板：未匹配 · SKU：${missingSkus.join('、')}`:''}`);}catch(error){setMessage(error instanceof Error?error.message:'订单表格导入失败');}finally{setBusy(false);}};
-  const chooseTemplates=async(event:ChangeEvent<HTMLInputElement>)=>{const candidates=Array.from(event.target.files??[]).filter(file=>/\.pdf$/i.test(file.name));event.target.value='';if(!candidates.length||busy)return;const known=new Set(templates.filter(item=>item.source==='custom'&&item.organizationId===templateTargetOrganizationId).map(item=>normalized(item.name.replace(/\.pdf$/i,'')))),files:File[]=[],duplicates:string[]=[];for(const file of candidates){const name=file.name.replace(/\.pdf$/i,''),key=normalized(name);if(known.has(key)){duplicates.push(name);continue;}known.add(key);files.push(file);}if(!files.length){warnDuplicateTemplate(duplicates[0]);return;}setBusy(true);setTemplateBusyLabel(`正在导入 ${files.length} 个模板…`);try{const uploaded=await saveTemplates(templateTargetOrganizationId,files),custom=await loadTemplates(),next=[...templates.filter(item=>item.source==='default'),...custom];setTemplates(next);setSelectedTemplateId(uploaded[0]?.id??custom[0]?.id??'');setMessage(`自定义模板已加入 ${files.length} 个文件并保存到所选组织模板仓库${duplicates.length?`；已跳过重名模板：${duplicates.join('、')}`:''}`);if(duplicates.length)window.alert(`以下自定义模板名称在所选组织内已经存在，未重复导入：\n${duplicates.join('\n')}`);}catch(error){setMessage(error instanceof Error?error.message:'模板导入失败');}finally{setBusy(false);setTemplateBusyLabel('');}};
-  const ensureTemplateFile=async(item:TemplateRecord)=>{if(item.file)return item;const file=await fetchPdfFile(item.fileUrl!,item.fileName??item.name),next={...item,file};setTemplates(current=>current.map(template=>template.id===item.id?next:template));return next;};
-  const duplicateTemplate=async()=>{if(!selectedTemplate||busy)return;const baseName=selectedTemplate.name.replace(/\.pdf$/i,''),name=window.prompt('请输入复制后的模板名称',`${baseName}-副本`)?.trim();if(!name)return;if(duplicateCustomTemplate(name)){warnDuplicateTemplate(name);return;}setBusy(true);setTemplateBusyLabel('正在复制模板…');try{const source=await ensureTemplateFile(selectedTemplate),file=new File([await source.file!.arrayBuffer()],`${safeName(name)||'模板副本'}.pdf`,{type:'application/pdf'}),copiedRegions=JSON.parse(JSON.stringify(regions)) as TemplateRegions,copy=await uploadManagedTemplate(templateTargetOrganizationId,file,name,{regions:copiedRegions,hasCover,pageCount:templatePageCount,pageMode,duplex,rotateCover,rotateInner},source.foregroundFile);setTemplates(current=>[...current,copy]);setSelectedTemplateId(copy.id);setMessage(`已复制模板“${baseName}”为“${name}”，可直接编辑修改`);}catch(error){setMessage(error instanceof Error?error.message:'模板复制失败');}finally{setBusy(false);setTemplateBusyLabel('');}};
-  const deleteTemplate=async()=>{if(!selectedTemplate||busy)return;if(!window.confirm(`确定删除模板“${selectedTemplate.name.replace(/\.pdf$/i,'')}”吗？`))return;setBusy(true);setTemplateBusyLabel('正在删除模板…');try{if(selectedTemplate.source==='custom')await deleteStoredTemplate(selectedTemplate.id);else{const hidden:string[]=JSON.parse(localStorage.getItem('jht-hidden-default-templates')??'[]'),sourceId=selectedTemplate.id.replace(/^default:/,'');localStorage.setItem('jht-hidden-default-templates',JSON.stringify([...new Set([...hidden,sourceId]) ]));}const next=templates.filter(item=>item.id!==selectedTemplate.id);setTemplates(next);setSelectedTemplateId(next[0]?.id??'');setMessage(`已删除模板“${selectedTemplate.name.replace(/\.pdf$/i,'')}”`);}catch(error){setMessage(error instanceof Error?error.message:'模板删除失败');}finally{setBusy(false);setTemplateBusyLabel('');}};
-  const clearCustomTemplates=async()=>{const custom=templates.filter(item=>item.source==='custom');if(!custom.length||busy)return;if(!window.confirm(`确定清除可访问组织中的 ${custom.length} 个自定义模板吗？内置模板不会被删除。`))return;setBusy(true);setTemplateBusyLabel(`正在清空 ${custom.length} 个模板…`);try{await clearStoredTemplates();const defaults=templates.filter(item=>item.source==='default');setTemplates(defaults);setSelectedTemplateId(defaults[0]?.id??'');setMessage(`已清除 ${custom.length} 个可访问自定义模板，内置模板已保留`);}catch(error){setMessage(error instanceof Error?error.message:'清空自定义模板失败');}finally{setBusy(false);setTemplateBusyLabel('');}};
-  const updateOrder=(id:string,updater:(order:Order)=>Order)=>setOrders(current=>current.map(order=>order.id===id?updater(order):order));
-  const deleteOrder=(order:Order)=>{if(!window.confirm(`确定删除订单“${order.name}”吗？\n\n删除后需要再次点击“保存批次”才会写入存档。`))return;const index=orders.findIndex(item=>item.id===order.id),remaining=orders.filter(item=>item.id!==order.id),next=remaining[Math.min(index,remaining.length-1)];setOrders(remaining);if(selectedId===order.id){setSelectedId(next?.id??'');setSelectedPage(0);setLightboxPage(null);}const removedUrls=[order.cover.url,...order.photos.map(photo=>photo.url),...(order.preview?[order.preview.url]:[])];removedUrls.forEach(URL.revokeObjectURL);urls.current=urls.current.filter(url=>!removedUrls.includes(url));setMessage(`已从当前批次删除订单“${order.name}”，请保存批次使修改生效`);};
-  const refreshBatchArchives=()=>listBatchArchives(String(user.id)).then(setBatchArchives);
-  const newBatch=()=>{if(batchDirty&&!window.confirm('当前批次有尚未保存的修改，确定新建批次吗？'))return;const date=new Date().toLocaleDateString('sv-SE'),pattern=new RegExp(`^${date} 第(\\d+)批$`),sequence=Math.max(0,...batchArchives.map(batch=>Number(batch.name.match(pattern)?.[1]??0)))+1,name=`${date} 第${sequence}批`;batchTracking.current=false;setOrders([]);setOrderSheet({});setSelectedId('');setSelectedPage(0);setActiveBatchId('');setActiveBatchName(name);setBatchSavedAt(null);setBatchDirty(false);setMessage(`已开始新批次“${name}”，导入订单后点击“保存批次”`);};
-  const saveCurrentBatch=async()=>{if(!orders.length){setMessage('当前批次没有订单，不能保存');return;}const name=activeBatchName.trim();if(!name)return;setBusy(true);try{const saved=await saveBatchArchive(String(user.id),{id:activeBatchId||undefined,name,orders,selectedId,includeOrderInfo,orderSheet});setActiveBatchId(saved.id);setActiveBatchName(saved.name);setBatchSavedAt(saved.updatedAt);setBatchDirty(false);await refreshBatchArchives();setMessage(`批次“${saved.name}”已保存，共 ${saved.orderCount} 个订单`);}catch(error){setMessage(error instanceof Error?error.message:'批次保存失败');}finally{setBusy(false);}};
-  const openBatch=async(id:string)=>{if(!id||id===activeBatchId)return;if(batchDirty&&!window.confirm('当前批次有尚未保存的修改，确定切换到其他存档吗？'))return;setBusy(true);try{const loaded=await loadBatchArchive(String(user.id),id);if(!loaded)throw new Error('找不到该批次存档');const restoredOrders:Order[]=loaded.archive.orders.flatMap(stored=>{try{const photosById=new Map<string,Photo>(),restorePhoto=(item:{id:string;fileKey:string})=>{const file=loaded.files.get(item.fileKey);if(!file)throw new Error('存档图片缺失');const photo={id:item.id,file,url:URL.createObjectURL(file)};urls.current.push(photo.url);photosById.set(item.id,photo);return photo;},cover=restorePhoto(stored.cover),photos=stored.photos.map(restorePhoto),preview=stored.preview?restorePhoto(stored.preview):undefined,arrangement=stored.arrangementIds.map(photoId=>photosById.get(photoId)).filter((photo):photo is Photo=>Boolean(photo));return arrangement.length?[{...stored,cover,photos,preview,arrangement}]:[];}catch{return[];}});batchTracking.current=false;setOrders(restoredOrders);setOrderSheet(loaded.archive.orderSheet??{});setIncludeOrderInfo(loaded.archive.includeOrderInfo);setSelectedId(restoredOrders.some(order=>order.id===loaded.archive.selectedId)?loaded.archive.selectedId:restoredOrders[0]?.id??'');setSelectedPage(0);setActiveBatchId(loaded.archive.id);setActiveBatchName(loaded.archive.name);setBatchSavedAt(loaded.archive.updatedAt);setBatchDirty(false);setMessage(`已打开批次“${loaded.archive.name}”，共 ${restoredOrders.length} 个订单`);}catch(error){setMessage(error instanceof Error?error.message:'批次打开失败');}finally{setBusy(false);}};
-  const removeBatch=async()=>{if(!activeBatchId)return;if(!window.confirm(`确定永久删除批次存档“${activeBatchName}”吗？当前工作区会保留，直到你切换或刷新页面。`))return;try{await deleteBatchArchive(String(user.id),activeBatchId);setActiveBatchId('');setBatchSavedAt(null);setBatchDirty(true);await refreshBatchArchives();setMessage(`存档“${activeBatchName}”已删除，当前订单仍保留在工作区`);}catch(error){setMessage(error instanceof Error?error.message:'批次存档删除失败');}};
-  const renameBatch=async()=>{if(!activeBatchId){setMessage('请先打开一个已经保存的批次');return;}const name=window.prompt('请输入新的批次名称',activeBatchName)?.trim();if(!name||name===activeBatchName)return;if(batchArchives.some(batch=>batch.id!==activeBatchId&&normalized(batch.name)===normalized(name))){window.alert('批次名称已经存在，请换一个名称');return;}try{await renameBatchArchive(String(user.id),activeBatchId,name);setActiveBatchName(name);await refreshBatchArchives();setMessage(`批次已重命名为“${name}”`);}catch(error){setMessage(error instanceof Error?error.message:'批次重命名失败');}};
-  const removeCheckedBatches=async()=>{const ids=[...checkedBatchIds];if(!ids.length)return;if(!window.confirm(`确定永久删除选中的 ${ids.length} 个批次存档吗？`))return;try{await deleteBatchArchives(String(user.id),ids);if(activeBatchId&&checkedBatchIds.has(activeBatchId)){setActiveBatchId('');setBatchSavedAt(null);setBatchDirty(true);}setCheckedBatchIds(new Set());setShowBatchManager(false);await refreshBatchArchives();setMessage(`已删除 ${ids.length} 个批次存档`);}catch(error){setMessage(error instanceof Error?error.message:'批量删除批次失败');}};
-  const updateTransform=(patch:Partial<Transform>)=>{if(!selectedOrder||!selectedPhoto)return;updateOrder(selectedOrder.id,order=>{const next={...(order.transforms[selectedPhoto.id]??initialTransform),...patch};next.x=Math.max(MIN_IMAGE_OFFSET,Math.min(MAX_IMAGE_OFFSET,next.x));next.y=Math.max(MIN_IMAGE_OFFSET,Math.min(MAX_IMAGE_OFFSET,next.y));return{...order,transforms:{...order.transforms,[selectedPhoto.id]:next},status:'pending'};});};
-  const updateTransformNumber=(key:keyof Transform,raw:string,min:number,max:number)=>{const value=Number(raw);if(!Number.isFinite(value))return;updateTransform({[key]:Math.max(min,Math.min(max,value))});};
-  const beginImageDrag=(event:ReactPointerEvent<HTMLDivElement>,page:number,photo:Photo)=>{if(!selectedOrder||event.button!==0||(event.target as HTMLElement).closest('.bound-handle'))return;event.preventDefault();event.stopPropagation();const regionElement=event.currentTarget.querySelector('.custom-photo'),imageElement=event.currentTarget.querySelector('[data-image-bounds]'),regionRect=regionElement?.getBoundingClientRect(),imageRect=imageElement?.getBoundingClientRect()??regionRect,transform=selectedOrder.transforms[photo.id]??initialTransform;if(!regionRect||!imageRect)return;event.currentTarget.setPointerCapture(event.pointerId);dragState.current={pointerId:event.pointerId,orderId:selectedOrder.id,photoId:photo.id,page,clientX:event.clientX,clientY:event.clientY,x:transform.x,y:transform.y,regionRect,imageRect};setSelectedPage(page);setDraggingPage(page);};
-  const centerImage=(event:ReactMouseEvent<HTMLDivElement>,page:number,photo:Photo)=>{const area=event.currentTarget.querySelector('.custom-photo')?.getBoundingClientRect(),image=event.currentTarget.querySelector('.photo-transform-layer>img') as HTMLImageElement|null;if(!selectedOrder||!area||!image||event.clientX<area.left||event.clientX>area.right||event.clientY<area.top||event.clientY>area.bottom)return;event.preventDefault();event.stopPropagation();const transform=selectedOrder.transforms[photo.id]??initialTransform,templateRotation=hasCover&&page===0?rotateCover:rotateInner,next=anchoredCoverTransform(area,image,event.clientX,event.clientY,transform,(transform.rotation??0)+(templateRotation?180:0));setSelectedPage(page);setOrders(current=>current.map(order=>order.id===selectedOrder.id?{...order,transforms:{...order.transforms,[photo.id]:next}}:order));setSnapGuides({page,vertical:'center',horizontal:'center'});window.setTimeout(()=>setSnapGuides(current=>current?.page===page?null:current),450);setMessage(`${hasCover&&page===0?'封面':months[page-pageOffset]}图片的右键定位点已居中，并自动补足缩放避免留白`);};
-  const moveImageDrag=(event:ReactPointerEvent<HTMLDivElement>)=>{const resizing=resizeState.current;if(resizing&&resizing.pointerId===event.pointerId){event.preventDefault();const distance=Math.max(1,Math.hypot(event.clientX-resizing.centerX,event.clientY-resizing.centerY)),scale=Math.max(MIN_IMAGE_SCALE,Math.min(MAX_IMAGE_SCALE,Number((resizing.scale*distance/resizing.distance).toFixed(2))));updateOrder(resizing.orderId,order=>({...order,transforms:{...order.transforms,[resizing.photoId]:{...(order.transforms[resizing.photoId]??initialTransform),scale}},status:'pending'}));return;}const drag=dragState.current;if(!drag||drag.pointerId!==event.pointerId)return;event.preventDefault();let dx=event.clientX-drag.clientX,dy=event.clientY-drag.clientY;const regionCenterX=drag.regionRect.left+drag.regionRect.width/2,regionCenterY=drag.regionRect.top+drag.regionRect.height/2,imageCenterX=drag.imageRect.left+drag.imageRect.width/2+dx,imageCenterY=drag.imageRect.top+drag.imageRect.height/2+dy,xCandidates=[{distance:Math.abs(imageCenterX-regionCenterX),correction:regionCenterX-imageCenterX,guide:'center' as const},{distance:Math.abs(drag.imageRect.left+dx-drag.regionRect.left),correction:drag.regionRect.left-(drag.imageRect.left+dx),guide:'left' as const},{distance:Math.abs(drag.imageRect.right+dx-drag.regionRect.right),correction:drag.regionRect.right-(drag.imageRect.right+dx),guide:'right' as const}],yCandidates=[{distance:Math.abs(imageCenterY-regionCenterY),correction:regionCenterY-imageCenterY,guide:'center' as const},{distance:Math.abs(drag.imageRect.top+dy-drag.regionRect.top),correction:drag.regionRect.top-(drag.imageRect.top+dy),guide:'top' as const},{distance:Math.abs(drag.imageRect.bottom+dy-drag.regionRect.bottom),correction:drag.regionRect.bottom-(drag.imageRect.bottom+dy),guide:'bottom' as const}],xSnap=xCandidates.sort((a,b)=>a.distance-b.distance)[0],ySnap=yCandidates.sort((a,b)=>a.distance-b.distance)[0],guides:SnapGuides={page:drag.page};if(xSnap.distance<=SNAP_TOLERANCE){dx+=xSnap.correction;guides.vertical=xSnap.guide;}if(ySnap.distance<=SNAP_TOLERANCE){dy+=ySnap.correction;guides.horizontal=ySnap.guide;}setSnapGuides(guides.vertical||guides.horizontal?guides:null);const x=Math.max(MIN_IMAGE_OFFSET,Math.min(MAX_IMAGE_OFFSET,drag.x+dx/drag.regionRect.width*100)),y=Math.max(MIN_IMAGE_OFFSET,Math.min(MAX_IMAGE_OFFSET,drag.y+dy/drag.regionRect.height*100));updateOrder(drag.orderId,order=>({...order,transforms:{...order.transforms,[drag.photoId]:{...(order.transforms[drag.photoId]??initialTransform),x,y}},status:'pending'}));};
-  const endImageDrag=(event:ReactPointerEvent<HTMLDivElement>)=>{const activePointer=dragState.current?.pointerId??resizeState.current?.pointerId;if(activePointer!==event.pointerId)return;dragState.current=null;resizeState.current=null;setDraggingPage(null);setSnapGuides(null);if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);};
-  const beginImageResize=(event:ReactPointerEvent<HTMLSpanElement>,page:number,photo:Photo)=>{if(!selectedOrder||event.button!==0)return;event.preventDefault();event.stopPropagation();const interaction=event.currentTarget.closest('.page-interaction'),region=interaction?.querySelector('.custom-photo')?.getBoundingClientRect(),transform=selectedOrder.transforms[photo.id]??initialTransform;if(!region)return;const centerX=region.left+region.width/2,centerY=region.top+region.height/2;event.currentTarget.setPointerCapture(event.pointerId);resizeState.current={pointerId:event.pointerId,orderId:selectedOrder.id,photoId:photo.id,page,centerX,centerY,distance:Math.max(1,Math.hypot(event.clientX-centerX,event.clientY-centerY)),scale:transform.scale};setSelectedPage(page);setDraggingPage(page);};
-  const adjustImageWithWheel=(event:ReactWheelEvent<HTMLDivElement>,page:number,photo:Photo)=>{if(!selectedOrder)return;event.preventDefault();event.stopPropagation();const transform=selectedOrder.transforms[photo.id]??initialTransform,step=event.deltaY<0?1:-1,next=event.altKey?{rotation:Math.max(-180,Math.min(180,(transform.rotation??0)+step))}:{scale:Math.max(MIN_IMAGE_SCALE,Math.min(MAX_IMAGE_SCALE,Number((transform.scale+step*.05).toFixed(2))))};setSelectedPage(page);updateOrder(selectedOrder.id,order=>({...order,transforms:{...order.transforms,[photo.id]:{...(order.transforms[photo.id]??initialTransform),...next}},status:'pending'}));};
-  const beginRotationDrag=(event:ReactPointerEvent<HTMLButtonElement>)=>{if(!selectedPhoto||event.button!==0)return;event.preventDefault();event.currentTarget.setPointerCapture(event.pointerId);rotationDrag.current={pointerId:event.pointerId,startX:event.clientX,rotation:selectedTransform.rotation??0};};
-  const moveRotationDrag=(event:ReactPointerEvent<HTMLButtonElement>)=>{const drag=rotationDrag.current;if(!drag||drag.pointerId!==event.pointerId)return;event.preventDefault();const raw=drag.rotation+(event.clientX-drag.startX)/2,rotation=Math.max(-180,Math.min(180,Math.round(raw)));updateTransform({rotation});};
-  const endRotationDrag=(event:ReactPointerEvent<HTMLButtonElement>)=>{const drag=rotationDrag.current;if(!drag||drag.pointerId!==event.pointerId)return;rotationDrag.current=null;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);};
-  const resetTransform=()=>updateTransform(initialTransform);
-  const movePage=(index:number,direction:-1|1)=>{if(!selectedOrder)return;const target=index+direction;if(target<0||target>11)return;updateOrder(selectedOrder.id,order=>{const next=[...order.arrangement];[next[index],next[target]]=[next[target],next[index]];return{...order,arrangement:next,status:'pending'};});setSelectedPage(target+pageOffset);};
-  const choosePagePhoto=(index:number,photoId:string)=>{if(!selectedOrder)return;updateOrder(selectedOrder.id,order=>{const photo=order.photos.find(item=>item.id===photoId);if(!photo)return order;const arrangement=[...order.arrangement];arrangement[index]=photo;return{...order,arrangement,status:'pending'};});setSelectedPage(index+pageOffset);};
-  const selectNextPending=()=>{setAwaitingNext(false);if(!orders.length)return;const start=Math.max(0,orders.findIndex(order=>order.id===selectedOrder?.id));for(let step=1;step<orders.length;step++){const order=orders[(start+step)%orders.length];if(order.status==='pending'){setSelectedId(order.id);setSelectedPage(0);setMessage(`已切换到待排版订单：${order.name}`);return;}}setMessage('没有其他待排版订单');};
-  const autoSaveConfirmedBatch=async(nextOrders:Order[],orderName:string,keyboard:boolean)=>{const date=new Date().toLocaleDateString('sv-SE'),pattern=new RegExp(`^${date} 第(\\d+)批$`),sequence=Math.max(0,...batchArchives.map(batch=>Number(batch.name.match(pattern)?.[1]??0)))+1,name=!activeBatchId&&activeBatchName==='未命名批次'?`${date} 第${sequence}批`:activeBatchName;try{const saved=await saveBatchArchive(String(user.id),{id:activeBatchId||undefined,name,orders:nextOrders,selectedId,includeOrderInfo,orderSheet});setActiveBatchId(saved.id);setActiveBatchName(saved.name);setBatchSavedAt(saved.updatedAt);setBatchDirty(false);await refreshBatchArchives();if(keyboard){setAwaitingNext(true);setMessage(`${orderName} 已确认并自动保存批次，再按回车进入下一个`);}else setMessage(`${orderName} 已确认排版，批次已自动保存`);}catch(error){setBatchDirty(true);setMessage(error instanceof Error?`${orderName} 已确认，但批次自动保存失败：${error.message}`:`${orderName} 已确认，但批次自动保存失败`);}};
-  const toggleOrderReady=(order:Order,keyboard=false)=>{if(order.status==='ready'){updateOrder(order.id,item=>({...item,status:'pending'}));setAwaitingNext(false);return;}if(!matchingTemplate(templates,order.sku)&&!window.confirm(`订单“${order.name}”的 SKU 没有命中模板，确认仍标记为已排版吗？`)){setMessage('已取消确认，请先检查或添加对应的 SKU 模板');return;}const nextOrders=orders.map(item=>item.id===order.id?{...item,status:'ready' as const}:item);setOrders(nextOrders);void autoSaveConfirmedBatch(nextOrders,order.name,keyboard);};
-  const saveTemplateConfig=async(value:TemplateRegions,name:string,nextHasCover:boolean,nextPageMode:PageMode,nextDuplex:boolean,nextRotateCover:boolean,nextRotateInner:boolean)=>{if(!selectedTemplateId)throw new Error('当前没有选中模板');if(selectedTemplate?.source==='custom'&&duplicateCustomTemplate(name,selectedTemplateId,selectedTemplate.organizationId))throw new Error(`模板名称“${name}”已存在，请使用其他名称`);if(nextDuplex&&![24,25].includes(templatePageCount))throw new Error(`双面印刷模板必须是24页或25页，当前PDF为${templatePageCount}页`);if(!nextDuplex&&![12,13].includes(templatePageCount))throw new Error(`单面印刷模板必须是12页或13页，当前PDF为${templatePageCount}页`);if(nextDuplex&&nextPageMode==='all')throw new Error('双面印刷必须选择仅奇数页或仅偶数页插图');if(selectedTemplate?.source==='custom'){const response=await fetch(`/api/templates/${selectedTemplateId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,regions:value,hasCover:nextHasCover,pageCount:templatePageCount,pageMode:nextPageMode,duplex:nextDuplex,rotateCover:nextRotateCover,rotateInner:nextRotateInner})}),data=await response.json().catch(()=>({})) as {template?:ManagedTemplate;error?:string};if(!response.ok||!data.template)throw new Error(data.error??'模板配置保存失败');setTemplates(current=>current.map(item=>item.id===selectedTemplateId?{...item,...managedTemplateRecord(data.template!),file:item.file,foregroundFile:item.foregroundFile}:item));}else setTemplates(current=>current.map(item=>item.id===selectedTemplateId?{...item,name,regions:value,hasCover:nextHasCover,pageCount:templatePageCount,pageMode:nextPageMode,duplex:nextDuplex,rotateCover:nextRotateCover,rotateInner:nextRotateInner}:item));setRegions(value);setHasCover(nextHasCover);setPageMode(nextPageMode);setDuplex(nextDuplex);setRotateCover(nextRotateCover);setRotateInner(nextRotateInner);setSelectedPage(0);setEditingTemplate(false);setMessage(`模板“${name}”的区域和固定参数已保存`);window.alert(`模板“${name}”配置保存成功`);};
-  useEffect(()=>{const handler=(event:KeyboardEvent)=>{const formTarget=['INPUT','TEXTAREA','SELECT'].includes((event.target as HTMLElement)?.tagName);if(!selectedPhoto||(formTarget&&event.key!=='PageUp'&&event.key!=='PageDown'))return;const step=event.shiftKey?5:1;if(event.key==='ArrowLeft'){event.preventDefault();updateTransform({x:selectedTransform.x-step});}else if(event.key==='ArrowRight'){event.preventDefault();updateTransform({x:selectedTransform.x+step});}else if(event.key==='ArrowUp'){event.preventDefault();updateTransform({y:selectedTransform.y-step});}else if(event.key==='ArrowDown'){event.preventDefault();updateTransform({y:selectedTransform.y+step});}else if(event.key==='PageDown'){event.preventDefault();const next=Math.min(11+pageOffset,selectedPage+1);setSelectedPage(next);if(lightboxPage!==null)setLightboxPage(next);}else if(event.key==='PageUp'){event.preventDefault();const next=Math.max(0,selectedPage-1);setSelectedPage(next);if(lightboxPage!==null)setLightboxPage(next);}else if(event.key==='Enter'&&selectedOrder){event.preventDefault();if(awaitingNext)selectNextPending();else toggleOrderReady(selectedOrder,true);}else if(event.key==='+'||event.key==='='){event.preventDefault();updateTransform({scale:Math.min(MAX_IMAGE_SCALE,selectedTransform.scale+.05)});}else if(event.key==='-'){event.preventDefault();updateTransform({scale:Math.max(MIN_IMAGE_SCALE,selectedTransform.scale-.05)});}else if(event.key.toLowerCase()==='r'){event.preventDefault();const rotation=selectedTransform.rotation??0,delta=event.shiftKey?-5:5;updateTransform({rotation:(((rotation+delta+180)%360)+360)%360-180});}else if(event.key==='0'){event.preventDefault();resetTransform();}};window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);},[selectedPhoto,selectedTransform,selectedOrder,orders,pageOffset,awaitingNext,templates,selectedPage,lightboxPage]);
-
-  const buildPdf=async(order:Order)=>{const matchedTemplate=order.sku?matchingTemplate(templates,order.sku):selectedTemplate;if(!matchedTemplate)throw new Error(order.sku?`订单 ${order.name} 缺少模板“${order.sku}”`:'请先选择模板');const orderTemplate=await ensureTemplateFile(matchedTemplate),pdf=await import('pdf-lib'),output=await pdf.PDFDocument.load(await orderTemplate.file!.arrayBuffer()),pageCount=output.getPageCount();
-const orderForegroundFile=orderTemplate.foregroundFile??(orderTemplate.source==='custom'?await loadForeground(orderTemplate.id):undefined);
-if(![12,13,24,25].includes(pageCount))throw new Error(`模板 ${orderTemplate.name} 页数不受支持：${pageCount}`);const orderRegions:TemplateRegions=orderTemplate.regions??defaultRegions,orderHasCover=orderTemplate.hasCover!==false,orderPageMode=orderTemplate.pageMode??'all',orderDuplex=orderTemplate.duplex??pageCount>=24,orderRotateCover=orderTemplate.rotateCover===true,orderRotateInner=orderTemplate.rotateInner===true;if(orderDuplex&&orderPageMode==='all')throw new Error(`双面模板 ${orderTemplate.name} 必须设置为奇数页或偶数页插图`);const pageNumbers=templatePageNumbers(pageCount,orderHasCover,orderPageMode),firstPageSize=output.getPage(0).getSize(),drawMasked=async(page:ReturnType<typeof output.getPage>,photo:Photo,region:TemplateRegions['cover'],transform:Transform,rotate180:boolean)=>{const {width:pageWidth,height:pageHeight}=page.getSize(),toPdf=(point:Point)=>({x:pageWidth*point.x/100,y:pageHeight*(100-point.y)/100}),bounds=regionBounds(region),points=regionPoints(region),box={x:pageWidth*bounds.x/100,y:pageHeight*(100-bounds.y-bounds.height)/100,width:pageWidth*bounds.width/100,height:pageHeight*bounds.height/100},first=toPdf(points[0]),curves=points.map((point,index)=>{const next=points[(index+1)%points.length],out=toPdf(control(point,'out')),inside=toPdf(control(next,'in')),end=toPdf(next);return pdf.appendBezierCurve(out.x,out.y,inside.x,inside.y,end.x,end.y);}),effectiveTransform=rotate180?{...transform,rotation:(transform.rotation??0)+180}:transform,dpiScale=300/72,image=await output.embedJpg(await optimizedJpeg(photo.file,Math.round(pageWidth*dpiScale*bounds.width/100),Math.round(pageHeight*dpiScale*bounds.height/100),effectiveTransform));page.pushOperators(pdf.pushGraphicsState(),pdf.moveTo(first.x,first.y),...curves,pdf.closePath(),pdf.clip(),pdf.endPath());page.drawImage(image,box);page.pushOperators(pdf.popGraphicsState());};let innerOffset=0;if(orderHasCover){await drawMasked(output.getPage(pageNumbers[0]-1),order.cover,orderRegions.cover,order.transforms[order.cover.id]??initialTransform,orderRotateCover);innerOffset=1;}const innerPages=pageNumbers.slice(innerOffset);for(let index=0;index<innerPages.length;index++){const photo=order.arrangement[index%order.arrangement.length],physicalIndex=innerPages[index]-1;await drawMasked(output.getPage(physicalIndex),photo,orderRegions.inner,order.transforms[photo.id]??initialTransform,orderRotateInner);}
-if(orderForegroundFile){const foregroundBytes=await orderForegroundFile.arrayBuffer(),foregroundDocument=await pdf.PDFDocument.load(foregroundBytes);if(foregroundDocument.getPageCount()!==pageCount)throw new Error("前景保护层页数与背景模板不一致");const embeddedPages=await output.embedPdf(foregroundBytes,Array.from({length:pageCount},(_,index)=>index));for(let index=0;index<pageCount;index++){const page=output.getPage(index),{width,height}=page.getSize();page.drawPage(embeddedPages[index],{x:0,y:0,width,height});}}
-if(includeOrderInfo){const {width:pageWidth,height:pageHeight}=firstPageSize,dpiScale=300/72,canvas=orderInfoCanvas(order.name,order.warehouse,Math.round(pageWidth*dpiScale),Math.round(pageHeight*dpiScale)),blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('订单信息页生成失败')),'image/png')),image=await output.embedPng(await blob.arrayBuffer()),page=output.insertPage(0,[pageWidth,pageHeight]);page.drawImage(image,{x:0,y:0,width:pageWidth,height:pageHeight});if(orderDuplex)output.insertPage(1,[pageWidth,pageHeight]);}const name=`${safeName(orderTemplate.name.replace(/\.pdf$/i,''))}-${safeName(order.name)}`;output.setTitle(name);output.setCreator('JHT ISP SYSTEM');return{name,bytes:await output.save({useObjectStreams:true,addDefaultPage:false})};
+function ensureMapUpsertCompatibility() {
+  const prototype = Map.prototype as Map<unknown, unknown> & {
+    getOrInsert?: (key: unknown, value: unknown) => unknown;
+    getOrInsertComputed?: (key: unknown, callback: (key: unknown) => unknown) => unknown;
   };
-  const download=(blob:Blob,name:string)=>{const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=name;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
-  const exportConfig=async(ids:Set<string>)=>{const targets=templates.filter(item=>ids.has(item.id));if(!targets.length){setMessage('请至少选择一个需要导出的模板');return;}setBusy(true);try{const JSZip=(await import('jszip')).default,zip=new JSZip(),items=[];for(let index=0;index<targets.length;index++){const item=await ensureTemplateFile(targets[index]),path=`templates/${String(index+1).padStart(3,'0')}.pdf`;zip.file(path,await item.file!.arrayBuffer());const foreground=item.foregroundFile??(item.source==='custom'?await loadForeground(item.id):undefined),foregroundPath=foreground?`templates/${String(index+1).padStart(3,'0')}-foreground.pdf`:undefined;if(foreground&&foregroundPath)zip.file(foregroundPath,await foreground.arrayBuffer());items.push({id:item.id,name:item.name,path,foregroundPath,regions:item.regions??defaultRegions,hasCover:item.hasCover!==false,pageCount:item.pageCount,pageMode:item.pageMode??'all',duplex:item.duplex??false,rotateCover:item.rotateCover??false,rotateInner:item.rotateInner??false});}zip.file('jht-config.json',JSON.stringify({format:'JHT-ISP-CONFIG',version:1,createdAt:new Date().toISOString(),templates:items},null,2));download(await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}}),`JHT-配置-${new Date().toISOString().slice(0,10)}.zip`);setMessage(`已导出 ${targets.length} 个模板及固定参数配置`);setShowTemplateExport(false);}catch(error){setMessage(error instanceof Error?error.message:'配置导出失败');}finally{setBusy(false);}};
-  const importConfig=async(event:ChangeEvent<HTMLInputElement>)=>{const file=event.target.files?.[0];event.target.value='';if(!file||busy)return;setBusy(true);setTemplateBusyLabel('正在导入模板配置…');try{const JSZip=(await import('jszip')).default,zip=await JSZip.loadAsync(file),manifestFile=zip.file('jht-config.json');if(!manifestFile)throw new Error('不是有效的JHT配置包');const manifest=JSON.parse(await manifestFile.async('text')) as TemplateManifest;if(manifest.format!=='JHT-ISP-CONFIG'||!Array.isArray(manifest.templates))throw new Error('配置包格式不正确');const restored:TemplateRecord[]=[];for(const item of manifest.templates){const pdfEntry=zip.file(item.path);if(!pdfEntry)throw new Error(`配置包缺少模板：${item.name}`);const foregroundEntry=item.foregroundPath?zip.file(item.foregroundPath):null;if(item.foregroundPath&&!foregroundEntry)throw new Error("配置包缺少前景保护层");const uploaded=await uploadManagedTemplate(templateTargetOrganizationId,new File([await pdfEntry.async('blob')],item.id,{type:'application/pdf'}),item.name,{regions:item.regions??defaultRegions,hasCover:item.hasCover!==false,pageCount:item.pageCount,pageMode:item.pageMode??'all',duplex:item.duplex??[24,25].includes(item.pageCount??0),rotateCover:item.rotateCover??item.rotateImported??false,rotateInner:item.rotateInner??item.rotateImported??false},foregroundEntry?new File([await foregroundEntry.async("blob")],item.id+"-foreground.pdf",{type:"application/pdf"}):undefined);restored.push(uploaded);}const custom=await loadTemplates(),next=[...templates.filter(item=>item.source==='default'),...custom];setTemplates(next);setSelectedTemplateId(restored[0]?.id??next[0]?.id??'');setMessage(`已恢复 ${restored.length} 个自定义模板及固定参数配置`);}catch(error){setMessage(error instanceof Error?error.message:'配置导入失败');}finally{setBusy(false);setTemplateBusyLabel('');}};
-  const exportCurrent=async()=>{if(!selectedOrder)return;setBusy(true);try{setProgress(`正在导出 ${selectedOrder.name}`);const result=await buildPdf(selectedOrder),blob=new Blob([result.bytes as BlobPart],{type:'application/pdf'});for(let copy=1;copy<=selectedOrder.quantity;copy++)download(blob,`${result.name}${selectedOrder.quantity>1?`-${copy}`:''}.pdf`);setMessage(`${selectedOrder.name} 已导出 ${selectedOrder.quantity} 份`);}catch(error){setMessage(error instanceof Error?error.message:'导出失败');}finally{setBusy(false);setProgress('');}};
-  const exportAll=async()=>{const targets=orders.filter(order=>order.status==='ready');if(!targets.length)return;setBusy(true);try{const JSZip=(await import('jszip')).default,zip=new JSZip(),total=targets.reduce((sum,order)=>sum+order.quantity,0);let completed=0;for(const order of targets){setProgress(`正在生成 ${completed+1}/${total}：${order.name}`);const result=await buildPdf(order);for(let copy=1;copy<=order.quantity;copy++){zip.file(`${result.name}${order.quantity>1?`-${copy}`:''}.pdf`,result.bytes);completed++;}}setProgress('正在打包…');download(await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}}),`已排版-${targets.length}个订单-${total}份.zip`);setMessage(`已打包导出 ${targets.length} 个订单，共 ${total} 份`);}catch(error){setMessage(error instanceof Error?error.message:'批量导出失败');}finally{setBusy(false);setProgress('');}};
-  const exportPdfsToFolder=async()=>{const targets=orders.filter(order=>order.status==='ready');if(!targets.length)return;type Writable={write:(data:Blob)=>Promise<void>;close:()=>Promise<void>};type FileHandle={createWritable:()=>Promise<Writable>};type DirectoryHandle={getFileHandle:(name:string,options:{create:boolean})=>Promise<FileHandle>};const picker=(window as typeof window&{showDirectoryPicker?:()=>Promise<DirectoryHandle>}).showDirectoryPicker;if(!picker){setMessage('当前浏览器不支持选择文件夹，请使用最新版Chrome或Edge');return;}try{const directory=await picker.call(window),total=targets.reduce((sum,order)=>sum+order.quantity,0);setBusy(true);let completed=0;for(const order of targets){const result=await buildPdf(order);for(let copy=1;copy<=order.quantity;copy++){setProgress(`正在保存 ${completed+1}/${total}：${order.name}`);const handle=await directory.getFileHandle(`${result.name}${order.quantity>1?`-${copy}`:''}.pdf`,{create:true}),writable=await handle.createWritable();await writable.write(new Blob([result.bytes as BlobPart],{type:'application/pdf'}));await writable.close();completed++;}}setMessage(`已将 ${targets.length} 个订单、共 ${total} 份PDF保存到所选文件夹`);}catch(error){if(error instanceof DOMException&&error.name==='AbortError')setMessage('已取消选择保存文件夹');else setMessage(error instanceof Error?error.message:'PDF文件夹导出失败');}finally{setBusy(false);setProgress('');}};
-
-  const sidebar=<aside className={`app-sidebar ${sidebarCollapsed?"collapsed":""}`}><button className="sidebar-collapse" onClick={()=>setSidebarCollapsed(value=>!value)} title={sidebarCollapsed?"展开菜单":"收起菜单"}>{sidebarCollapsed?"»":"«"}</button><div className="sidebar-brand"><span>JHT</span><div><b>图片处理</b><small>ISP SYSTEM</small></div></div><nav><p>工作台</p>{user.permissions.includes('customization')&&<button className={!templateManagement&&!accountManagement&&!changelogOpen?"active":""} onClick={()=>{setTemplateManagement(false);setAccountManagement(false);setChangelogOpen(false)}}><i>01</i><span>定制处理</span><em>›</em></button>}{user.permissions.includes('templates')&&<button className={templateManagement&&!changelogOpen?"active":""} onClick={()=>{setTemplateManagement(true);setAccountManagement(false);setChangelogOpen(false)}}><i>02</i><span>模板管理</span><em>›</em></button>}{user.permissions.includes('accounts')&&<button className={accountManagement&&!changelogOpen?"active":""} onClick={()=>{setTemplateManagement(false);setAccountManagement(true);setChangelogOpen(false)}}><i>03</i><span>账号管理</span><em>›</em></button>}<button className={changelogOpen?"active":""} onClick={()=>{setTemplateManagement(false);setAccountManagement(false);setChangelogOpen(true)}}><i>04</i><span>更新日志</span><em>›</em></button></nav><div className="sidebar-account"><div className="sidebar-user"><b>{user.username}</b><small>{user.organizations.length>1?`${user.organizations.length} 个组织`:(user.organizations[0]?.name??'默认组织')}</small></div><button onClick={logout}>退出登录</button></div></aside>;
-  if(accountManagement)return <><AccountManagement/>{sidebar}</>;
-  if(changelogOpen)return <><UpdateLog/>{sidebar}</>;
-
-  if(templateManagement)return <main className="template-management-page with-sidebar">{sidebar}<header className="system-bar page-topbar"><div className="page-heading"><b>模板管理</b><span>双击模板可直接编辑；保存后参数才生效</span></div></header><section className="template-management-toolbar">{user.organizations.length>1&&<label className="template-target-organization">保存到组织<select value={templateTargetOrganizationId} onChange={event=>setTemplateTargetOrganizationId(event.target.value)} disabled={busy}>{user.organizations.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<label className={busy?'disabled':''}>{templateBusyLabel||'导入 PDF 模板'}<input type="file" accept="application/pdf" multiple disabled={busy} onChange={chooseTemplates}/></label><label className={busy?'disabled':''}>{templateBusyLabel||'导入模板配置'}<input type="file" accept=".zip,application/zip" disabled={busy} onChange={importConfig}/></label><button disabled={busy||!templates.length} onClick={()=>{setExportTemplateIds(new Set(templates.map(item=>item.id)));setShowTemplateExport(true)}}>{templateBusyLabel||'导出模板配置'}</button><button disabled={busy||!allTemplatePages.length} onClick={()=>setEditingTemplate(true)}>编辑定制区域与参数</button><button disabled={busy||!selectedTemplate} onClick={duplicateTemplate}>{templateBusyLabel||'复制当前模板'}</button><button className="danger" disabled={busy||!selectedTemplate} onClick={deleteTemplate}>{templateBusyLabel||'删除当前模板'}</button><button className="danger ghost" disabled={busy||!customTemplateCount} onClick={clearCustomTemplates}>{templateBusyLabel||'清空自定义模板'}</button>{templateBusyLabel&&<span className="template-toolbar-loading">{templateBusyLabel}</span>}</section><section className="template-management-content"><aside><h2>模板列表 <span>{visibleTemplates.length}/{templates.length}</span></h2><input className="template-search" type="search" placeholder="搜索模板名称" value={templateSearch} onChange={event=>setTemplateSearch(event.target.value)}/>{visibleTemplates.map(item=>{const itemMode=item.pageMode??'all',coverRotated=item.rotateCover===true,innerRotated=item.rotateInner===true,itemPages=item.pageCount??'待识别',itemHasCover=item.hasCover!==false,itemDuplex=item.duplex===true,hasForeground=Boolean(item.foregroundFile||item.foregroundUrl);return <button key={item.id} className={item.id===selectedTemplateId?'active':''} onClick={()=>setSelectedTemplateId(item.id)} onDoubleClick={()=>{setSelectedTemplateId(item.id);setEditingTemplate(true)}}><b>{item.name.replace(/\.pdf$/i,'')}</b><small>{item.source==='default'?'内置模板':user.organizations.find(organization=>organization.id===item.organizationId)?.name??'自定义模板'}</small><span className="template-list-params"><em>{itemPages}页</em><em>{itemHasCover?'有封面':'无封面'}</em><em>{itemMode==='all'?'全部页':itemMode==='odd'?'奇数页':'偶数页'}</em><em>{itemDuplex?'双面':'单面'}</em>{itemHasCover&&<em>封面{coverRotated?"旋转180°":"保持方向"}</em>}<em>内页{innerRotated?"旋转180°":"保持方向"}</em>{hasForeground&&<em className="foreground-badge">前景保护</em>}</span></button>})}{!templates.length?<p>当前没有模板。你可以导入 PDF；部署内置模板包更新后，也会在这里自动出现。</p>:!visibleTemplates.length&&<p>没有匹配“{templateSearch}”的模板。</p>}</aside><div className="template-management-detail">{selectedTemplate?<><div className="template-detail-title"><div><small>{selectedTemplate.source==='default'?'内置模板':'自定义模板'}</small><h2>{selectedTemplate.name.replace(/\.pdf$/i,'')}</h2></div><span>{templatePageCount} 页 · {hasCover?'含封面':'无封面'} · {pageMode==='all'?'全部页插图':pageMode==='odd'?'奇数页插图':'偶数页插图'} · {duplex?'双面':'单面'}{rotateImported?' · 图片旋转180°':''}</span></div><div className={`template-preview-pair ${hasCover?'two':''}`}>{hasCover&&<TemplateLayerPreview backgroundUrl={allTemplatePages[0]} foregroundUrl={foregroundPages[0]} region={regions.cover} label="封面"/>}<TemplateLayerPreview backgroundUrl={templatePages[hasCover?1:0]} foregroundUrl={foregroundPages[hasCover?1:0]} region={regions.inner} label="内页示例"/></div><p>{templateBusyLabel||message}</p></>:<div className="template-empty-detail"><b>请选择或导入模板</b><span>模板固定参数、区域编辑、复制和删除都集中在这个页面。</span></div>}</div></section>{editingTemplate&&selectedTemplate&&<TemplateEditor pages={allTemplatePages} value={regions} templateName={selectedTemplate.name.replace(/\.pdf$/i,'')} hasCover={hasCover} pageCount={templatePageCount} pageMode={pageMode} duplex={duplex} rotateImported={rotateImported} rotateCover={rotateCover} rotateInner={rotateInner} onClose={()=>setEditingTemplate(false)} onSave={saveTemplateConfig}/>}{showTemplateExport&&<TemplateExportDialog templates={templates} selected={exportTemplateIds} onChange={setExportTemplateIds} onClose={()=>setShowTemplateExport(false)} onConfirm={()=>exportConfig(exportTemplateIds)} busy={busy}/>}</main>;
-
-  const pages=selectedOrder?[...(hasCover?[{label:'封面',photo:selectedOrder.cover}]:[]),...months.map((label,index)=>({label,photo:selectedOrder.arrangement[index]}))]:[];
-  return <main className="app-shell with-sidebar">{sidebar}<header className="system-bar page-topbar"><div className="page-heading"><b>定制处理</b><span>批量订单图片排版与导出</span></div><div className="header-actions"><label className="header-button sheet-import">导入订单表格<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importOrderSheet}/></label><label className="header-button primary">导入订单文件夹<input ref={folderInput} type="file" webkitdirectory="" directory="" multiple onChange={importFolder}/></label></div></header>
-    <div className="summary-bar"><div className="template-picker"><span>模板</span><select value={selectedTemplateId} onChange={event=>setSelectedTemplateId(event.target.value)}><option value="">请选择模板</option>{templates.map(item=><option value={item.id} key={item.id}>{item.source==='default'?'[内置] ':'[自定义] '}{item.name.replace(/\.pdf$/i,'')}</option>)}</select><button className={`order-info-toggle ${includeOrderInfo?'active':''}`} onClick={()=>setIncludeOrderInfo(value=>!value)}>{includeOrderInfo?'✓ 订单信息页':'订单信息页'}</button></div><div className="summary-stats"><span>订单 <b>{orders.length}</b></span><span className="shipment-stat">发货数 <b>{shipmentCount}</b></span><span>待排版 <b>{pendingCount}</b></span><span className="ready-text">已排版 <b>{readyCount}</b></span><button type="button" className="warning-stat missing-summary" onClick={()=>setShowMissingTemplates(true)}>缺少模板 <b>{missingTemplateCount}</b></button><span className="warning-stat">未匹配订单 <b>{unmatchedCount}</b></span></div><div className="current-order">当前订单 <b>{selectedOrder?.name??'—'}</b>{selectedOrder&&<div className="summary-order-actions"><button onClick={()=>updateOrder(selectedOrder.id,order=>({...order,arrangement:arrangeInSequence(order.photos),status:'pending'}))}>重新补排</button><button className={selectedOrder.status==='ready'?'confirmed':''} onClick={()=>toggleOrderReady(selectedOrder)}>{selectedOrder.status==='ready'?'✓ 已排版':'确认已排版'}</button><button className={`next-order ${awaitingNext?'awaiting':''}`} onClick={selectNextPending}>{awaitingNext?'✓ 已经确认，进入下一个':'下一个 →'}</button></div>}</div></div>
-    {showBatchManager&&<div className="batch-manager-backdrop" onClick={()=>setShowBatchManager(false)}><section className="batch-manager-dialog" onClick={event=>event.stopPropagation()}><header><b>批次管理</b><button onClick={()=>setShowBatchManager(false)}>×</button></header><div className="batch-manager-actions"><button onClick={()=>setCheckedBatchIds(new Set(batchArchives.map(batch=>batch.id)))}>全选</button><button onClick={()=>setCheckedBatchIds(new Set())}>取消全选</button></div><div className="batch-manager-list">{batchArchives.map(batch=><label key={batch.id}><input type="checkbox" checked={checkedBatchIds.has(batch.id)} onChange={event=>{const next=new Set(checkedBatchIds);if(event.target.checked)next.add(batch.id);else next.delete(batch.id);setCheckedBatchIds(next)}}/><span><b>{batch.name}</b><small>{batch.orderCount} 个订单 · {new Date(batch.updatedAt).toLocaleString("zh-CN")}</small></span></label>)}</div><footer><span>已选择 {checkedBatchIds.size} 个</span><button disabled={!checkedBatchIds.size} onClick={removeCheckedBatches}>删除所选批次</button></footer></section></div>}{showMissingTemplates&&<MissingTemplateDialog names={missingTemplateNames} onClose={()=>setShowMissingTemplates(false)} onCopied={count=>{setMessage(`已复制 ${count} 个缺少模板名称`);setShowMissingTemplates(false)}}/>}
-    <div className="batch-workspace"><aside className="orders-panel"><div className="orders-head"><h2>订单列表</h2><span>{visibleOrders.length}/{orders.length}</span></div><input className="search" placeholder="搜索订单名称" value={search} onChange={event=>setSearch(event.target.value)}/><div className="filters"><button className={filter==='all'?'active':''} onClick={()=>setFilter('all')}>全部</button><button className={filter==='pending'?'active':''} onClick={()=>setFilter('pending')}>未排</button><button className={filter==='ready'?'active':''} onClick={()=>setFilter('ready')}>已排</button><button className={filter==='unmatched'?'active':''} onClick={()=>setFilter('unmatched')}>未匹配</button><button className={filter==='missing-template'?'active':''} onClick={()=>setFilter('missing-template')}>缺模板</button></div><select className="category-filter" value={skuFilter} onChange={event=>setSkuFilter(event.target.value)}><option value="all">全部 SKU 模板</option>{skuOptions.map(sku=><option key={sku} value={sku}>{sku}</option>)}</select><div className="batch-archive-controls"><div className="batch-archive-head"><span>批次存档</span><b>{batchDirty?"未保存":activeBatchId?"已保存":"未存档"}</b></div><p className="active-batch-name">{activeBatchName}</p><select value={activeBatchId} onChange={event=>openBatch(event.target.value)}><option value="">选择已有存档</option>{batchArchives.map(batch=><option key={batch.id} value={batch.id}>{batch.name} · {batch.orderCount}单</option>)}</select><div><button type="button" onClick={newBatch}>新建批次</button><button type="button" className="save-batch" disabled={busy||!orders.length} onClick={saveCurrentBatch}>保存批次</button><button type="button" disabled={!activeBatchId} onClick={renameBatch}>重命名</button><button type="button" className="delete-batch" onClick={()=>{setCheckedBatchIds(new Set());setShowBatchManager(true)}}>批次管理</button></div><small>{batchSavedAt?"上次保存："+new Date(batchSavedAt).toLocaleString("zh-CN"):"尚未保存为批次"}</small></div><div className="order-list">{visibleOrders.map((order,index)=>{const matchedTemplate=matchingTemplate(templates,order.sku);return <button className={`order-row ${selectedOrder?.id===order.id?'selected':''}`} key={order.id} onClick={()=>{setSelectedId(order.id);setSelectedPage(0)}}><span className={`status-mark ${order.status}`}>{order.status==='ready'?'✓':String(index+1).padStart(2,'0')}</span><span><b>{order.name}</b><small className="shipment-line">发货 <strong className={`shipment-quantity ${!order.sheetMatched?'unmatched':order.quantity>1?'multi-shipment':''}`}>{order.sheetMatched?order.quantity:'—'}</strong><span>{order.photos.length+(hasCover?1:0)} 张图片</span></small><small className={`template-match ${order.sheetMatched&&!matchedTemplate?'missing':''}`}>{matchedTemplate?`SKU：${order.sku} · 模板：${matchedTemplate.name.replace(/\.pdf$/i,'')}（${matchedTemplate.source==='custom'?'自定义':'内置'}）`:order.sheetMatched?`模板：未匹配 · SKU：${order.sku||'SKU未提供'}`:'表格：未匹配 · 模板：待匹配'}</small></span><em>{order.status==='ready'?'已排版':'待排版'}</em></button>})}{!visibleOrders.length&&<p className="empty-list">没有匹配订单</p>}</div>{selectedOrder&&<div className="order-delete-zone"><span>危险操作</span><button type="button" onClick={()=>deleteOrder(selectedOrder)}>删除当前订单</button></div>}</aside>
-      <section className="pages-panel"><div className="pages-head"><p>{selectedOrder?`输出文件：${templateBase}-${safeName(selectedOrder.name)}.pdf`:'每个一级子文件夹将被识别为一个订单'}</p></div>
-        {selectedOrder?<div className="page-grid">{pages.map((item,index)=>{const transform=selectedOrder.transforms[item.photo.id]??initialTransform,region=hasCover&&index===0?regions.cover:regions.inner,isCover=hasCover&&index===0;return <article className={`page-card page-position-${index} ${selectedPage===index?'selected':''} ${draggingPage===index?'dragging':''}`} key={`${item.label}-${index}`} onClick={()=>setSelectedPage(index)} onDoubleClick={()=>{setSelectedPage(index);setLightboxPage(index)}}><div className="page-interaction" title="拖动图片；滚轮缩放；Option/Alt+滚轮旋转；右键回到中心" onContextMenu={event=>centerImage(event,index,item.photo)} onPointerDown={event=>beginImageDrag(event,index,item.photo)} onPointerMove={moveImageDrag} onPointerUp={endImageDrag} onPointerCancel={endImageDrag} onWheel={event=>adjustImageWithWheel(event,index,item.photo)}><PageVisual templateUrl={templatePages[index]} photo={item.photo} transform={transform} region={region} label={item.label} rotateImported={isCover?rotateCover:rotateInner} foregroundPages={foregroundPages} showBounds={selectedPage===index} snapGuides={snapGuides?.page===index?snapGuides:undefined} onResizeStart={event=>beginImageResize(event,index,item.photo)}/></div>{selectedPage===index&&<span className="editing-badge">正在调整</span>}<span className="page-index">{String(index+1).padStart(2,'0')}</span><div className="page-caption"><span><b>{item.label}</b><small>{item.photo.file.name}</small></span>{index>=pageOffset&&<div className="move-buttons"><button disabled={index===pageOffset} onClick={event=>{event.stopPropagation();movePage(index-pageOffset,-1)}}>←</button><button disabled={index===11+pageOffset} onClick={event=>{event.stopPropagation();movePage(index-pageOffset,1)}}>→</button></div>}</div>{index>=pageOffset&&<select className="page-photo-picker" aria-label={`指定${item.label}图片`} value={item.photo.id} onClick={event=>event.stopPropagation()} onChange={event=>choosePagePhoto(index-pageOffset,event.target.value)}>{selectedOrder.photos.map((photo,photoIndex)=><option value={photo.id} key={photo.id}>{photoIndex+1}. {photo.file.name}</option>)}</select>}</article>})}{includeOrderInfo&&<article className="page-card order-info-card"><OrderInfoVisual orderNumber={selectedOrder.name} warehouse={selectedOrder.warehouse}/><span className="page-index">附</span><div className="page-caption"><span><b>订单信息页</b><small>{selectedOrder.warehouse||'未提供收货仓库'} · 条码</small></span></div></article>}</div>:<button type="button" className="empty-stage" onClick={()=>folderInput.current?.click()}><b>从文件夹开始</b><p>点击选择包含多个订单子文件夹的总文件夹。</p><small>根目录如有 Excel 订单表格将自动读取</small></button>}
-      </section>
-      <aside className={`adjust-panel ${selectedPhoto?'active':''}`}><div className="adjust-title"><span>03</span><div><h2>图片调整</h2><p>{selectedPhoto?.file.name??'先选择一个页面'}</p></div></div><div className="selected-preview actual-preview">{selectedPhoto?<div className={`page-interaction side-interaction ${draggingPage===selectedPage?'dragging':''}`} title="拖动图片；滚轮缩放；Option/Alt+滚轮旋转；右键回到中心" onContextMenu={event=>centerImage(event,selectedPage,selectedPhoto)} onPointerDown={event=>beginImageDrag(event,selectedPage,selectedPhoto)} onPointerMove={moveImageDrag} onPointerUp={endImageDrag} onPointerCancel={endImageDrag} onWheel={event=>adjustImageWithWheel(event,selectedPage,selectedPhoto)}><PageVisual templateUrl={templatePages[selectedPage]} photo={selectedPhoto} transform={selectedTransform} region={selectedRegion} label={hasCover&&selectedPage===0?'封面':months[selectedPage-pageOffset]} rotateImported={hasCover&&selectedPage===0?rotateCover:rotateInner} foregroundPages={foregroundPages} showBounds snapGuides={snapGuides?.page===selectedPage?snapGuides:undefined} onResizeStart={event=>beginImageResize(event,selectedPage,selectedPhoto)}/></div>:<span>无图片</span>}<em>{hasCover&&selectedPage===0?'封面':months[selectedPage-pageOffset]}</em></div>{selectedOrder?.preview&&<div className="order-reference" onDoubleClick={()=>setPreviewLightbox(true)} title="双击放大"><b>合成预览图</b><img src={selectedOrder.preview.url} alt="合成预览图"/><small>双击放大观察，不参与导出</small></div>}<label><span>缩放 <input className="value-input" type="number" min="0.5" max="5" step="0.01" value={selectedTransform.scale} onChange={event=>updateTransformNumber("scale",event.target.value,.5,5)}/></span><input type="range" min="0.5" max="5" step=".01" value={selectedTransform.scale} disabled={!selectedPhoto} onChange={event=>updateTransform({scale:Number(event.target.value)})}/></label><label><span>左右 <input className="value-input" type="number" min="-80" max="80" step="1" value={selectedTransform.x} onChange={event=>updateTransformNumber("x",event.target.value,MIN_IMAGE_OFFSET,MAX_IMAGE_OFFSET)}/></span><input type="range" min="-80" max="80" value={selectedTransform.x} disabled={!selectedPhoto} onChange={event=>updateTransform({x:Number(event.target.value)})}/></label><label><span>上下 <input className="value-input" type="number" min="-80" max="80" step="1" value={selectedTransform.y} onChange={event=>updateTransformNumber("y",event.target.value,MIN_IMAGE_OFFSET,MAX_IMAGE_OFFSET)}/></span><input type="range" min="-80" max="80" value={selectedTransform.y} disabled={!selectedPhoto} onChange={event=>updateTransform({y:Number(event.target.value)})}/></label><label><span>旋转 <input className="value-input" type="number" min="-180" max="180" step="0.1" value={selectedTransform.rotation??0} onChange={event=>updateTransformNumber("rotation",event.target.value,-180,180)}/></span><input type="range" min="-180" max="180" step="1" value={selectedTransform.rotation??0} disabled={!selectedPhoto} onChange={event=>updateTransform({rotation:Number(event.target.value)})}/></label><button className="rotation-drag" disabled={!selectedPhoto} onPointerDown={beginRotationDrag} onPointerMove={moveRotationDrag} onPointerUp={endRotationDrag} onPointerCancel={endRotationDrag}>↻ 按住并左右拖动旋转</button><button className="reset" onClick={resetTransform} disabled={!selectedPhoto}>重置当前图片</button><div className="shortcuts"><b>鼠标与键盘</b><p><span className="mouse-key">拖动</span> 直接移动图片</p><p><span className="mouse-key">右键</span> 点击位置居中并自动补足缩放</p><p><span className="mouse-key">滚轮</span> 缩放图片</p><p><kbd>Option</kbd>/<kbd>Alt</kbd> + 滚轮旋转</p><p><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 移动 1%</p><p><kbd>PgUp</kbd><kbd>PgDn</kbd> 上一页 / 下一页</p><p><kbd>Enter</kbd> 确认已排版</p><p><kbd>R</kbd> 顺时针旋转 5°</p><p><kbd>Shift</kbd>+<kbd>R</kbd> 逆时针旋转 5°</p><p><kbd>+</kbd><kbd>-</kbd> 缩放· <kbd>0</kbd> 重置</p></div></aside>
-    </div>
-    <footer className="export-bar"><div><span className={`status-dot ${readyCount?'ok':''}`}/><div><b>{progress||message}</b><small>{orders.length?`已排版 ${readyCount} / ${orders.length}，可导出 ${readyShipmentCount} 份`:'等待导入订单'}</small></div></div><div className="export-actions"><button disabled={!selectedOrder||busy||!template} onClick={exportCurrent}>导出当前 {selectedOrder&&selectedOrder.quantity>1?`×${selectedOrder.quantity}`:''}</button><button className="folder-export" disabled={!readyCount||busy||!template} onClick={exportPdfsToFolder}>PDF导出到文件夹</button><button className="batch-export" disabled={!readyCount||busy||!template} onClick={exportAll}>ZIP批量导出 <span>{readyShipmentCount}</span></button></div></footer>{lightboxPage!==null&&selectedOrder&&pages[lightboxPage]&&<div className="page-lightbox" onClick={()=>setLightboxPage(null)}><button className="lightbox-close" onClick={()=>setLightboxPage(null)}>×</button><button className="lightbox-nav prev" disabled={lightboxPage===0} onClick={event=>{event.stopPropagation();const next=Math.max(0,lightboxPage-1);setLightboxPage(next);setSelectedPage(next)}}>‹ 上一张</button><div className="lightbox-content" onClick={event=>event.stopPropagation()}><div className="page-interaction lightbox-interaction" title="拖动图片；滚轮缩放；Option/Alt+滚轮旋转；右键回到中心" onContextMenu={event=>centerImage(event,lightboxPage,pages[lightboxPage].photo)} onPointerDown={event=>beginImageDrag(event,lightboxPage,pages[lightboxPage].photo)} onPointerMove={moveImageDrag} onPointerUp={endImageDrag} onPointerCancel={endImageDrag} onWheel={event=>adjustImageWithWheel(event,lightboxPage,pages[lightboxPage].photo)}><PageVisual templateUrl={templatePages[lightboxPage]} photo={pages[lightboxPage].photo} transform={selectedOrder.transforms[pages[lightboxPage].photo.id]??initialTransform} region={hasCover&&lightboxPage===0?regions.cover:regions.inner} label={pages[lightboxPage].label} rotateImported={hasCover&&lightboxPage===0?rotateCover:rotateInner} foregroundPages={foregroundPages} showBounds snapGuides={snapGuides?.page===lightboxPage?snapGuides:undefined} onResizeStart={event=>beginImageResize(event,lightboxPage,pages[lightboxPage].photo)}/></div><b>{pages[lightboxPage].label} · {pages[lightboxPage].photo.file.name}</b><div className="lightbox-adjustments"><label><span>缩放 <input className="value-input" type="number" min="0.5" max="5" step="0.01" value={selectedTransform.scale} onChange={event=>updateTransformNumber("scale",event.target.value,.5,5)}/></span><input type="range" min="0.5" max="5" step=".01" value={selectedTransform.scale} onChange={event=>updateTransform({scale:Number(event.target.value)})}/></label><label><span>左右 <input className="value-input" type="number" min="-80" max="80" step="1" value={selectedTransform.x} onChange={event=>updateTransformNumber("x",event.target.value,MIN_IMAGE_OFFSET,MAX_IMAGE_OFFSET)}/></span><input type="range" min="-80" max="80" value={selectedTransform.x} onChange={event=>updateTransform({x:Number(event.target.value)})}/></label><label><span>上下 <input className="value-input" type="number" min="-80" max="80" step="1" value={selectedTransform.y} onChange={event=>updateTransformNumber("y",event.target.value,MIN_IMAGE_OFFSET,MAX_IMAGE_OFFSET)}/></span><input type="range" min="-80" max="80" value={selectedTransform.y} onChange={event=>updateTransform({y:Number(event.target.value)})}/></label><label><span>旋转 <input className="value-input" type="number" min="-180" max="180" step="0.1" value={selectedTransform.rotation??0} onChange={event=>updateTransformNumber("rotation",event.target.value,-180,180)}/></span><input type="range" min="-180" max="180" step="1" value={selectedTransform.rotation??0} onChange={event=>updateTransform({rotation:Number(event.target.value)})}/></label></div></div>{selectedOrder.preview&&<aside className="lightbox-reference"><b>合成预览图</b><img src={selectedOrder.preview.url} alt="合成预览图"/><small>仅供对照，不参与导出</small></aside>}<button className="lightbox-nav next" disabled={lightboxPage===pages.length-1} onClick={event=>{event.stopPropagation();const next=Math.min(pages.length-1,lightboxPage+1);setLightboxPage(next);setSelectedPage(next)}}>下一张 ›</button></div>}{previewLightbox&&selectedOrder?.preview&&<div className="preview-lightbox" onClick={()=>setPreviewLightbox(false)}><button onClick={()=>setPreviewLightbox(false)}>×</button><img src={selectedOrder.preview.url} alt="合成预览图放大" onClick={event=>event.stopPropagation()}/></div>}{editingTemplate&&selectedTemplate&&<TemplateEditor pages={allTemplatePages} value={regions} templateName={selectedTemplate.name.replace(/\.pdf$/i,'')} hasCover={hasCover} pageCount={templatePageCount} pageMode={pageMode} duplex={duplex} rotateImported={rotateImported} rotateCover={rotateCover} rotateInner={rotateInner} onClose={()=>setEditingTemplate(false)} onSave={saveTemplateConfig}/>}
-  </main>;
+  if (typeof prototype.getOrInsert !== 'function')
+    Object.defineProperty(prototype, 'getOrInsert', {
+      value: function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+        if (this.has(key)) return this.get(key);
+        this.set(key, value);
+        return value;
+      },
+      configurable: true,
+      writable: true
+    });
+  if (typeof prototype.getOrInsertComputed !== 'function')
+    Object.defineProperty(prototype, 'getOrInsertComputed', {
+      value: function (
+        this: Map<unknown, unknown>,
+        key: unknown,
+        callback: (key: unknown) => unknown
+      ) {
+        if (this.has(key)) return this.get(key);
+        const value = callback(key);
+        this.set(key, value);
+        return value;
+      },
+      configurable: true,
+      writable: true
+    });
+}
+function shuffle<T>(items: T[]) {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+async function loadPdfJs() {
+  ensureMapUpsertCompatibility();
+  if (import.meta.env.DEV) return import('pdfjs-dist');
+  return import(/* @vite-ignore */ pdfJsModuleUrl) as Promise<typeof import('pdfjs-dist')>;
+}
+function arrange(photos: Photo[]) {
+  if (!photos.length) return [];
+  const result: Photo[] = [];
+  let previous = '';
+  while (result.length < 12) {
+    let round = shuffle(photos);
+    if (round.length > 1 && round[0].id === previous) [round[0], round[1]] = [round[1], round[0]];
+    round = round.slice(0, 12 - result.length);
+    result.push(...round);
+    previous = result.at(-1)?.id ?? '';
+  }
+  return result;
+}
+function arrangeInSequence(photos: Photo[]) {
+  const fixed = photos.slice(0, 12);
+  return [...fixed, ...arrange(photos).slice(0, 12 - fixed.length)];
+}
+function safeName(value: string) {
+  return value.replace(/[\\/:*?"<>|]/g, '-').trim();
+}
+const code128Patterns = [
+  '212222',
+  '222122',
+  '222221',
+  '121223',
+  '121322',
+  '131222',
+  '122213',
+  '122312',
+  '132212',
+  '221213',
+  '221312',
+  '231212',
+  '112232',
+  '122132',
+  '122231',
+  '113222',
+  '123122',
+  '123221',
+  '223211',
+  '221132',
+  '221231',
+  '213212',
+  '223112',
+  '312131',
+  '311222',
+  '321122',
+  '321221',
+  '312212',
+  '322112',
+  '322211',
+  '212123',
+  '212321',
+  '232121',
+  '111323',
+  '131123',
+  '131321',
+  '112313',
+  '132113',
+  '132311',
+  '211313',
+  '231113',
+  '231311',
+  '112133',
+  '112331',
+  '132131',
+  '113123',
+  '113321',
+  '133121',
+  '313121',
+  '211331',
+  '231131',
+  '213113',
+  '213311',
+  '213131',
+  '311123',
+  '311321',
+  '331121',
+  '312113',
+  '312311',
+  '332111',
+  '314111',
+  '221411',
+  '431111',
+  '111224',
+  '111422',
+  '121124',
+  '121421',
+  '141122',
+  '141221',
+  '112214',
+  '112412',
+  '122114',
+  '122411',
+  '142112',
+  '142211',
+  '241211',
+  '221114',
+  '413111',
+  '241112',
+  '134111',
+  '111242',
+  '121142',
+  '121241',
+  '114212',
+  '124112',
+  '124211',
+  '411212',
+  '421112',
+  '421211',
+  '212141',
+  '214121',
+  '412121',
+  '111143',
+  '111341',
+  '131141',
+  '114113',
+  '114311',
+  '411113',
+  '411311',
+  '113141',
+  '114131',
+  '311141',
+  '411131',
+  '211412',
+  '211214',
+  '211232',
+  '2331112'
+];
+function barcodeValue(value: string) {
+  const ascii = Array.from(value)
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return code >= 32 && code <= 126;
+    })
+    .join('');
+  return ascii || 'ORDER';
+}
+function drawCode128(
+  context: CanvasRenderingContext2D,
+  value: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) {
+  const text = barcodeValue(value),
+    codes = Array.from(text, (char) => char.charCodeAt(0) - 32),
+    checksum = (104 + codes.reduce((sum, code, index) => sum + code * (index + 1), 0)) % 103,
+    patterns = [
+      code128Patterns[104],
+      ...codes.map((code) => code128Patterns[code]),
+      code128Patterns[checksum],
+      code128Patterns[106]
+    ],
+    modules =
+      patterns.reduce(
+        (sum, pattern) =>
+          sum + Array.from(pattern).reduce((total, digit) => total + Number(digit), 0),
+        0
+      ) + 20,
+    moduleWidth = width / modules;
+  let cursor = x + 10 * moduleWidth;
+  context.fillStyle = '#111';
+  for (const pattern of patterns) {
+    Array.from(pattern).forEach((digit, index) => {
+      const part = Number(digit) * moduleWidth;
+      if (index % 2 === 0) context.fillRect(cursor, y, Math.ceil(part), height);
+      cursor += part;
+    });
+  }
+}
+function orderInfoCanvas(orderNumber: string, warehouse = '', width = 1240, height = 1754) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('无法生成订单信息页');
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = '#111';
+  context.lineWidth = Math.max(2, width * 0.002);
+  context.strokeRect(width * 0.07, height * 0.06, width * 0.86, height * 0.88);
+  context.textAlign = 'center';
+  context.fillStyle = '#111';
+  context.font = `700 ${Math.round(width * 0.055)}px sans-serif`;
+  context.fillText('订单信息', width / 2, height * 0.2);
+  context.font = `500 ${Math.round(width * 0.025)}px sans-serif`;
+  context.fillStyle = '#666';
+  context.fillText('ORDER INFORMATION', width / 2, height * 0.245);
+  context.fillStyle = '#111';
+  context.font = `700 ${Math.round(width * 0.052)}px sans-serif`;
+  context.fillText(orderNumber, width / 2, height * 0.39, width * 0.78);
+  context.font = `600 ${Math.round(width * 0.027)}px sans-serif`;
+  context.fillText(`收货仓库：${warehouse || '未提供'}`, width / 2, height * 0.48, width * 0.78);
+  drawCode128(context, orderNumber, width * 0.33, height * 0.57, width * 0.34, height * 0.08);
+  context.font = `500 ${Math.round(width * 0.018)}px monospace`;
+  context.fillText(barcodeValue(orderNumber), width / 2, height * 0.69, width * 0.42);
+  context.font = `500 ${Math.round(width * 0.018)}px sans-serif`;
+  context.fillStyle = '#777';
+  const generatedDate = new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+  context.fillText(`生成日期：${generatedDate}`, width / 2, height * 0.88);
+  return canvas;
+}
+function regionPoints(region: TemplateRegions['inner']): Point[] {
+  return region.points?.length
+    ? region.points
+    : [
+        {x: region.x, y: region.y},
+        {x: region.x + region.width, y: region.y},
+        {x: region.x + region.width, y: region.y + region.height},
+        {x: region.x, y: region.y + region.height}
+      ];
+}
+function control(point: Point, kind: 'in' | 'out') {
+  return {x: point[`${kind}X`] ?? point.x, y: point[`${kind}Y`] ?? point.y};
+}
+function sampledRegion(region: TemplateRegions['inner']) {
+  const points = regionPoints(region);
+  if (points.length < 2) return points;
+  const sampled: Point[] = [];
+  for (let index = 0; index < points.length; index++) {
+    const a = points[index],
+      b = points[(index + 1) % points.length],
+      out = control(a, 'out'),
+      inside = control(b, 'in'),
+      curved =
+        Math.hypot(out.x - a.x, out.y - a.y) > 0.001 ||
+        Math.hypot(inside.x - b.x, inside.y - b.y) > 0.001,
+      steps = curved ? 48 : 1;
+    for (let step = 0; step < steps; step++) {
+      const t = step / steps,
+        u = 1 - t;
+      sampled.push({
+        x: u * u * u * a.x + 3 * u * u * t * out.x + 3 * u * t * t * inside.x + t * t * t * b.x,
+        y: u * u * u * a.y + 3 * u * u * t * out.y + 3 * u * t * t * inside.y + t * t * t * b.y
+      });
+    }
+  }
+  return sampled;
+}
+function regionBounds(region: TemplateRegions['inner']) {
+  const points = sampledRegion(region),
+    xs = points.map((point) => point.x),
+    ys = points.map((point) => point.y),
+    x = Math.min(...xs),
+    y = Math.min(...ys),
+    right = Math.max(...xs),
+    bottom = Math.max(...ys);
+  return {x, y, width: right - x, height: bottom - y};
+}
+function regionClip(region: TemplateRegions['inner']) {
+  const bounds = regionBounds(region);
+  return `polygon(${sampledRegion(region)
+    .map(
+      (point) =>
+        `${((point.x - bounds.x) / bounds.width) * 100}% ${((point.y - bounds.y) / bounds.height) * 100}%`
+    )
+    .join(',')})`;
+}
+async function suitableScale(file: File, region: TemplateRegions['cover'], pageSize: PageSize) {
+  const bitmap = await createImageBitmap(file, {imageOrientation: 'from-image'}),
+    bounds = regionBounds(region),
+    targetWidth = (pageSize.width * bounds.width) / 100,
+    targetHeight = (pageSize.height * bounds.height) / 100,
+    containScale = Math.min(targetWidth / bitmap.width, targetHeight / bitmap.height),
+    displayWidth = bitmap.width * containScale,
+    displayHeight = bitmap.height * containScale,
+    coverScale = Math.max(targetWidth / displayWidth, targetHeight / displayHeight);
+  bitmap.close();
+  return Math.min(MAX_IMAGE_SCALE, Math.max(MIN_IMAGE_SCALE, coverScale));
+}
+function anchoredCoverTransform(
+  area: DOMRect,
+  image: HTMLImageElement,
+  clientX: number,
+  clientY: number,
+  transform: Transform,
+  effectiveRotation: number
+): Transform {
+  const width = area.width,
+    height = area.height,
+    imageAspect = (image.naturalWidth || 1) / (image.naturalHeight || 1),
+    areaAspect = width / height,
+    baseWidth = imageAspect >= areaAspect ? width : imageAspect * height,
+    baseHeight = imageAspect >= areaAspect ? width / imageAspect : height,
+    left = -baseWidth / 2,
+    right = baseWidth / 2,
+    top = -baseHeight / 2,
+    bottom = baseHeight / 2,
+    angle = (effectiveRotation * Math.PI) / 180,
+    cos = Math.cos(angle),
+    sin = Math.sin(angle),
+    scale = Math.max(0.001, transform.scale),
+    translatedX = clientX - (area.left + width / 2) - (width * transform.x) / 100,
+    translatedY = clientY - (area.top + height / 2) - (height * transform.y) / 100,
+    anchorX = (cos * translatedX + sin * translatedY) / scale,
+    anchorY = (-sin * translatedX + cos * translatedY) / scale,
+    corners = [
+      [-width / 2, -height / 2],
+      [width / 2, -height / 2],
+      [width / 2, height / 2],
+      [-width / 2, height / 2]
+    ],
+    requirements = [MIN_IMAGE_SCALE];
+  for (const [cornerX, cornerY] of corners) {
+    const localX = cos * cornerX + sin * cornerY,
+      localY = -sin * cornerX + cos * cornerY;
+    requirements.push(
+      localX >= 0
+        ? localX / Math.max(0.001, right - anchorX)
+        : -localX / Math.max(0.001, anchorX - left),
+      localY >= 0
+        ? localY / Math.max(0.001, bottom - anchorY)
+        : -localY / Math.max(0.001, anchorY - top)
+    );
+  }
+  const nextScale = Math.min(MAX_IMAGE_SCALE, Math.max(transform.scale, ...requirements) * 1.005),
+    rotatedAnchorX = cos * anchorX - sin * anchorY,
+    rotatedAnchorY = sin * anchorX + cos * anchorY,
+    nextX = Math.max(
+      MIN_IMAGE_OFFSET,
+      Math.min(MAX_IMAGE_OFFSET, ((-nextScale * rotatedAnchorX) / width) * 100)
+    ),
+    nextY = Math.max(
+      MIN_IMAGE_OFFSET,
+      Math.min(MAX_IMAGE_OFFSET, ((-nextScale * rotatedAnchorY) / height) * 100)
+    );
+  return {...transform, scale: nextScale, x: nextX, y: nextY};
+}
+function sequenceOf(name: string) {
+  const match = name.match(/消费者上传原图[^\d]*(\d+)(?=[^\d]*\.[^.]+$)/);
+  return match ? Number(match[1]) : null;
+}
+function normalized(value: string) {
+  return value.trim().toLowerCase();
+}
+function templatePageNumbers(pageCount: number, hasCover: boolean, pageMode: PageMode) {
+  const cover = hasCover ? [1] : [],
+    candidates = Array.from({length: pageCount}, (_, index) => index + 1)
+      .filter((page) => !hasCover || page !== 1)
+      .filter(
+        (page) => pageMode === 'all' || (pageMode === 'odd' ? page % 2 === 1 : page % 2 === 0)
+      );
+  return [...cover, ...candidates];
+}
+function matchingTemplate(templates: TemplateRecord[], sku?: string) {
+  if (!sku) return undefined;
+  const key = normalized(sku);
+  return (
+    templates.find(
+      (item) => item.source === 'custom' && normalized(item.name.replace(/\.pdf$/i, '')) === key
+    ) ??
+    templates.find(
+      (item) => item.source === 'default' && normalized(item.name.replace(/\.pdf$/i, '')) === key
+    )
+  );
+}
+async function parseOrderWorkbook(file: File) {
+  const JSZip = (await import('jszip')).default,
+    zip = await JSZip.loadAsync(file),
+    sharedEntry = zip.file('xl/sharedStrings.xml'),
+    shared: string[] = [];
+  if (sharedEntry) {
+    const document = new DOMParser().parseFromString(
+      await sharedEntry.async('text'),
+      'application/xml'
+    );
+    document.querySelectorAll('si').forEach((item) =>
+      shared.push(
+        Array.from(item.querySelectorAll('t'))
+          .map((node) => node.textContent ?? '')
+          .join('')
+      )
+    );
+  }
+  const sheetEntry = zip
+    .file(/^xl\/worksheets\/sheet\d+\.xml$/)
+    .sort((a, b) => a.name.localeCompare(b.name))[0];
+  if (!sheetEntry) throw new Error('Excel 中没有可读取的工作表');
+  const document = new DOMParser().parseFromString(
+      await sheetEntry.async('text'),
+      'application/xml'
+    ),
+    rows: string[][] = [];
+  document.querySelectorAll('sheetData row').forEach((row) => {
+    const values: string[] = [];
+    row.querySelectorAll('c').forEach((cell) => {
+      const reference = cell.getAttribute('r') ?? '',
+        letters = reference.match(/[A-Z]+/)?.[0] ?? 'A';
+      let column = 0;
+      for (const letter of letters) column = column * 26 + letter.charCodeAt(0) - 64;
+      column--;
+      const type = cell.getAttribute('t'),
+        raw = cell.querySelector('v')?.textContent ?? '',
+        inline = Array.from(cell.querySelectorAll('is t'))
+          .map((node) => node.textContent ?? '')
+          .join('');
+      values[column] =
+        type === 's' ? (shared[Number(raw)] ?? '') : type === 'inlineStr' ? inline : raw;
+    });
+    rows.push(values);
+  });
+  const headerIndex = rows.findIndex(
+    (row) =>
+      ['SKU货号', '定制ID', '收货仓库'].every((header) => row.includes(header)) &&
+      row.some((header) => header === '发货数' || header === '发货数量')
+  );
+  if (headerIndex < 0) throw new Error('Excel 缺少“SKU货号、定制ID、收货仓库、发货数”表头');
+  const headers = rows[headerIndex],
+    skuIndex = headers.indexOf('SKU货号'),
+    idIndex = headers.indexOf('定制ID'),
+    warehouseIndex = headers.indexOf('收货仓库'),
+    quantityIndex = Math.max(headers.indexOf('发货数'), headers.indexOf('发货数量'));
+  return rows
+    .slice(headerIndex + 1)
+    .map((row) => ({
+      customId: String(row[idIndex] ?? '').trim(),
+      sku: String(row[skuIndex] ?? '').trim(),
+      warehouse: String(row[warehouseIndex] ?? '').trim(),
+      quantity: Math.max(1, Math.floor(Number(row[quantityIndex]) || 1))
+    }))
+    .filter((row) => row.customId);
+}
+async function fetchPdfFile(url: string, name: string, onProgress?: (percent: number) => void) {
+  const response = await fetch(url, {cache: 'no-store'});
+  if (!response.ok) throw new Error(`模板文件读取失败：${name}`);
+  const total = Number(response.headers.get('content-length')) || 0,
+    reader = response.body?.getReader();
+  if (!reader) {
+    onProgress?.(100);
+    return new File([await response.blob()], name, {type: 'application/pdf'});
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      received += value.byteLength;
+      if (total) onProgress?.(Math.min(99, Math.round((received / total) * 100)));
+    }
+  }
+  onProgress?.(100);
+  return new File(chunks, name, {type: 'application/pdf'});
+}
+function managedTemplateRecord(item: ManagedTemplate): TemplateRecord {
+  return {
+    id: item.id,
+    organizationId: item.organizationId,
+    name: item.name,
+    fileUrl: item.fileUrl,
+    fileName: item.fileName,
+    foregroundUrl: item.foregroundUrl,
+    source: 'custom' as const,
+    regions: item.regions,
+    hasCover: item.hasCover,
+    pageCount: item.pageCount,
+    pageMode: item.pageMode,
+    duplex: item.duplex,
+    rotateCover: item.rotateCover,
+    rotateInner: item.rotateInner
+  };
+}
+async function uploadManagedTemplate(
+  organizationId: string,
+  file: File,
+  name = file.name.replace(/\.pdf$/i, ''),
+  metadata: Record<string, unknown> = {},
+  foregroundFile?: File
+) {
+  const form = new FormData();
+  form.set('organizationId', organizationId);
+  form.set('name', name);
+  form.set('file', file);
+  form.set('metadata', JSON.stringify(metadata));
+  if (foregroundFile) form.set('foregroundFile', foregroundFile);
+  const response = await fetch('/api/templates', {method: 'POST', body: form});
+  const data = (await response.json().catch(() => ({}))) as {
+    template?: ManagedTemplate;
+    error?: string;
+    hint?: string;
+  };
+  if (!response.ok || !data.template) {
+    const message = [data.error ?? '模板上传失败', data.hint].filter(Boolean).join('\n');
+    window.alert(message);
+    throw new Error(message);
+  }
+  return {...managedTemplateRecord(data.template), file, foregroundFile};
+}
+async function saveTemplates(organizationId: string, files: File[]) {
+  return Promise.all(files.map((file) => uploadManagedTemplate(organizationId, file)));
+}
+async function saveForeground(templateId: string, file: File) {
+  const form = new FormData();
+  form.set('file', file);
+  const response = await fetch(`/api/templates/${templateId}/foreground`, {
+    method: 'POST',
+    body: form
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error ?? '前景保护层上传失败');
+  }
+}
+async function loadForeground(templateId: string) {
+  const response = await fetch(`/api/templates/${templateId}/foreground`, {cache: 'no-store'});
+  return response.ok
+    ? new File([await response.blob()], `${templateId}-foreground.pdf`, {type: 'application/pdf'})
+    : undefined;
+}
+async function loadTemplates() {
+  const response = await fetch('/api/templates', {cache: 'no-store'});
+  if (!response.ok) return [];
+  const data = (await response.json()) as {templates: ManagedTemplate[]};
+  return data.templates.map(managedTemplateRecord);
+}
+async function loadDefaultTemplates() {
+  const response = await fetch('/default-template.zip');
+  if (!response.ok) throw new Error('内置模板加载失败');
+  const JSZip = (await import('jszip')).default,
+    zip = await JSZip.loadAsync(await response.arrayBuffer()),
+    manifestFile = zip.file('jht-config.json');
+  if (!manifestFile) throw new Error('内置模板配置无效');
+  const manifest = JSON.parse(await manifestFile.async('text')) as TemplateManifest;
+  if (manifest.format !== 'JHT-ISP-CONFIG' || !Array.isArray(manifest.templates))
+    throw new Error('内置模板配置格式不正确');
+  const hidden = new Set<string>(
+      JSON.parse(localStorage.getItem('jht-hidden-default-templates') ?? '[]')
+    ),
+    templates: TemplateRecord[] = [];
+  for (const item of manifest.templates) {
+    if (hidden.has(item.id)) continue;
+    const entry = zip.file(item.path);
+    if (!entry) throw new Error(`内置模板缺少文件：${item.name}`);
+    const file = new File([await entry.async('blob')], item.id, {type: 'application/pdf'}),
+      foregroundEntry = item.foregroundPath ? zip.file(item.foregroundPath) : null,
+      foregroundFile = foregroundEntry
+        ? new File([await foregroundEntry.async('blob')], `${item.id}-foreground.pdf`, {
+            type: 'application/pdf'
+          })
+        : undefined;
+    templates.push({
+      id: `default:${item.id}`,
+      name: item.name,
+      file,
+      foregroundFile,
+      source: 'default',
+      regions: item.regions ?? defaultRegions,
+      hasCover: item.hasCover !== false,
+      pageCount: item.pageCount,
+      pageMode: item.pageMode,
+      duplex: item.duplex,
+      rotateCover: item.rotateCover,
+      rotateInner: item.rotateInner
+    });
+  }
+  return templates;
+}
+async function deleteStoredTemplate(id: string) {
+  const response = await fetch(`/api/templates/${id}`, {method: 'DELETE'});
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error ?? '模板删除失败');
+  }
+}
+async function clearStoredTemplates() {
+  const custom = await loadTemplates();
+  await Promise.all(custom.map((item) => deleteStoredTemplate(item.id)));
+}
+async function optimizedJpeg(file: File, width: number, height: number, transform: Transform) {
+  const bitmap = await createImageBitmap(file, {imageOrientation: 'from-image'}),
+    canvas = document.createElement('canvas');
+  canvas.width = Math.round(width);
+  canvas.height = Math.round(height);
+  const context = canvas.getContext('2d', {alpha: false});
+  if (!context) throw new Error('无法处理图片');
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const baseScale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height),
+    w = bitmap.width * baseScale * transform.scale,
+    h = bitmap.height * baseScale * transform.scale;
+  context.save();
+  context.translate(
+    canvas.width / 2 + (canvas.width * transform.x) / 100,
+    canvas.height / 2 + (canvas.height * transform.y) / 100
+  );
+  context.rotate(((transform.rotation ?? 0) * Math.PI) / 180);
+  context.drawImage(bitmap, -w / 2, -h / 2, w, h);
+  context.restore();
+  bitmap.close();
+  const blob = await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob(
+      (value) => (value ? resolve(value) : reject(new Error('图片压缩失败'))),
+      'image/jpeg',
+      0.9
+    )
+  );
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
-export default function Home(){return <AuthGate><Workshop/></AuthGate>}
+type SnapGuides = {
+  page: number;
+  vertical?: 'left' | 'center' | 'right';
+  horizontal?: 'top' | 'center' | 'bottom';
+};
+function PageVisual({
+  templateUrl,
+  photo,
+  transform,
+  region,
+  label,
+  pageSize,
+  rotateImported = false,
+  foregroundPages = [],
+  showBounds = false,
+  snapGuides,
+  onResizeStart
+}: {
+  templateUrl?: string;
+  photo: Photo;
+  transform: Transform;
+  region: TemplateRegions['cover'];
+  label: string;
+  pageSize?: PageSize;
+  rotateImported?: boolean;
+  foregroundPages?: string[];
+  showBounds?: boolean;
+  snapGuides?: SnapGuides;
+  onResizeStart?: (event: ReactPointerEvent<HTMLSpanElement>) => void;
+}) {
+  const bounds = regionBounds(region),
+    index =
+      label === '封面'
+        ? 0
+        : Math.max(0, months.indexOf(label) + (foregroundPages.length > 12 ? 1 : 0)),
+    foregroundUrl = foregroundPages[index],
+    [imageSize, setImageSize] = useState({width: 1, height: 1}),
+    size = pageSize ?? activeTemplatePageSize,
+    regionAspect = (size.width * bounds.width) / (size.height * bounds.height),
+    imageAspect = imageSize.width / imageSize.height,
+    box =
+      imageAspect >= regionAspect
+        ? {
+            width: 100,
+            height: (regionAspect / imageAspect) * 100,
+            left: 0,
+            top: (100 - (regionAspect / imageAspect) * 100) / 2
+          }
+        : {
+            width: (imageAspect / regionAspect) * 100,
+            height: 100,
+            left: (100 - (imageAspect / regionAspect) * 100) / 2,
+            top: 0
+          };
+  return (
+    <div className="a4-page" style={{aspectRatio: `${size.width} / ${size.height}`}}>
+      {templateUrl ? (
+        <img className="template-page" src={templateUrl} alt={`${label}模板`} />
+      ) : (
+        <div className="page-loading">模板加载中</div>
+      )}
+      <div
+        className="custom-photo"
+        style={{
+          left: `${bounds.x}%`,
+          top: `${bounds.y}%`,
+          width: `${bounds.width}%`,
+          height: `${bounds.height}%`,
+          clipPath: regionClip(region)
+        }}
+      >
+        <div
+          className="photo-transform-layer"
+          style={{
+            transform: `translate(${transform.x}%,${transform.y}%) scale(${transform.scale}) rotate(${(transform.rotation ?? 0) + (rotateImported ? 180 : 0)}deg)`
+          }}
+        >
+          <img
+            src={photo.url}
+            alt={photo.file.name}
+            onLoad={(event) =>
+              setImageSize({
+                width: event.currentTarget.naturalWidth || 1,
+                height: event.currentTarget.naturalHeight || 1
+              })
+            }
+          />
+          {showBounds && (
+            <span
+              className="image-bounds"
+              data-image-bounds="true"
+              style={{
+                left: `${box.left}%`,
+                top: `${box.top}%`,
+                width: `${box.width}%`,
+                height: `${box.height}%`
+              }}
+            >
+              {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((handle) => (
+                <i
+                  key={handle}
+                  className={`bound-handle ${handle}`}
+                  onPointerDown={handle.length === 2 ? onResizeStart : undefined}
+                />
+              ))}
+            </span>
+          )}
+        </div>
+        {snapGuides?.vertical && <span className={`snap-guide vertical ${snapGuides.vertical}`} />}{' '}
+        {snapGuides?.horizontal && (
+          <span className={`snap-guide horizontal ${snapGuides.horizontal}`} />
+        )}
+      </div>
+      {foregroundUrl && (
+        <img className="foreground-page" src={foregroundUrl} alt={`${label}前景保护层`} />
+      )}
+    </div>
+  );
+}
+
+function TemplateLayerPreview({
+  backgroundUrl,
+  foregroundUrl,
+  region,
+  label,
+  pageSize,
+  progress = activeTemplatePreviewProgress
+}: {
+  backgroundUrl?: string;
+  foregroundUrl?: string;
+  region: TemplateRegions['cover'];
+  label: string;
+  pageSize?: PageSize;
+  progress?: number;
+}) {
+  const bounds = regionBounds(region),
+    size = pageSize ?? activeTemplatePageSize,
+    visibleBackground = progress >= 100 ? backgroundUrl : undefined;
+  return (
+    <figure className="template-layer-figure">
+      <div
+        className="template-cover-preview layered-template-preview"
+        style={{aspectRatio: `${size.width} / ${size.height}`}}
+      >
+        {visibleBackground ? (
+          <img className="layer-background" src={visibleBackground} alt={`${label}背景`} />
+        ) : (
+          <div className="template-preview-loading">
+            <span>正在加载… {progress}%</span>
+            <i>
+              <b style={{width: `${progress}%`}} />
+            </i>
+          </div>
+        )}
+        {visibleBackground && (
+          <div
+            className="region-inspection-fill"
+            style={{
+              left: `${bounds.x}%`,
+              top: `${bounds.y}%`,
+              width: `${bounds.width}%`,
+              height: `${bounds.height}%`,
+              clipPath: regionClip(region)
+            }}
+            aria-label={`${label}实际填充区域`}
+          />
+        )}{' '}
+        {visibleBackground && foregroundUrl && (
+          <img className="layer-foreground" src={foregroundUrl} alt={`${label}前景保护层`} />
+        )}
+      </div>
+      <figcaption>
+        {label}
+        <span className={foregroundUrl ? 'foreground-status enabled' : 'foreground-status'}>
+          {foregroundUrl ? '已叠加前景保护' : '无前景保护'}
+        </span>
+      </figcaption>
+    </figure>
+  );
+}
+
+function MissingTemplateDialog({
+  names,
+  onClose,
+  onCopied
+}: {
+  names: string[];
+  onClose: () => void;
+  onCopied: (count: number) => void;
+}) {
+  const content = names.join('\n');
+  const copyAll = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      onCopied(names.length);
+    } catch {
+      window.prompt('请复制以下缺少模板名称', content);
+    }
+  };
+  return (
+    <div className="missing-template-backdrop" onClick={onClose}>
+      <section
+        className="missing-template-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="缺少模板列表"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <b>缺少模板</b>
+            <span>共 {names.length} 个 SKU</span>
+          </div>
+          <button onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </header>
+        {names.length ? (
+          <>
+            <textarea readOnly value={content} aria-label="缺少模板名称" />
+            <footer>
+              <small>可以直接选择上方文字复制</small>
+              <button onClick={copyAll}>复制全部</button>
+            </footer>
+          </>
+        ) : (
+          <p>当前没有缺少的模板。</p>
+        )}
+      </section>
+    </div>
+  );
+}
+function TemplateExportDialog({
+  templates,
+  selected,
+  onChange,
+  onClose,
+  onConfirm,
+  busy
+}: {
+  templates: TemplateRecord[];
+  selected: Set<string>;
+  onChange: (ids: Set<string>) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+  busy: boolean;
+}) {
+  const allSelected = templates.length > 0 && selected.size === templates.length;
+  return (
+    <div className="template-export-backdrop" onClick={onClose}>
+      <section
+        className="template-export-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="选择导出的模板"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <b>选择导出模板</b>
+            <span>
+              已选择 {selected.size} / {templates.length}
+            </span>
+          </div>
+          <button onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </header>
+        <div className="template-export-actions">
+          <button onClick={() => onChange(new Set(templates.map((item) => item.id)))}>全选</button>
+          <button onClick={() => onChange(new Set())}>取消全选</button>
+        </div>
+        <div className="template-export-list">
+          {templates.map((item) => (
+            <label key={item.id}>
+              <input
+                type="checkbox"
+                checked={selected.has(item.id)}
+                onChange={(event) => {
+                  const next = new Set(selected);
+                  if (event.target.checked) next.add(item.id);
+                  else next.delete(item.id);
+                  onChange(next);
+                }}
+              />
+              <span>
+                <b>{item.name.replace(/\.pdf$/i, '')}</b>
+                <small>{item.source === 'default' ? '内置模板' : '自定义模板'}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+        <footer>
+          <label>
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={(event) =>
+                onChange(
+                  event.target.checked ? new Set(templates.map((item) => item.id)) : new Set()
+                )
+              }
+            />
+            全选全部模板
+          </label>
+          <div>
+            <button onClick={onClose}>取消</button>
+            <button className="confirm" disabled={!selected.size || busy} onClick={onConfirm}>
+              {busy ? '正在导出…' : `导出所选（${selected.size}）`}
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+function OrderInfoVisual({
+  orderNumber,
+  warehouse,
+  pageSize = {width: 595.276, height: 841.89}
+}: {
+  orderNumber: string;
+  warehouse?: string;
+  pageSize?: PageSize;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const source = orderInfoCanvas(
+        orderNumber,
+        warehouse,
+        Math.round(pageSize.width * 2),
+        Math.round(pageSize.height * 2)
+      ),
+      canvas = ref.current,
+      context = canvas?.getContext('2d');
+    if (!canvas || !context) return;
+    canvas.width = source.width;
+    canvas.height = source.height;
+    context.drawImage(source, 0, 0);
+  }, [orderNumber, warehouse, pageSize.width, pageSize.height]);
+  return (
+    <div
+      className="a4-page order-info-page"
+      style={{aspectRatio: `${pageSize.width}/${pageSize.height}`}}
+    >
+      <canvas ref={ref} aria-label={`订单信息：${orderNumber}`} />
+    </div>
+  );
+}
+function UpdateLog() {
+  return (
+    <main className="update-log-page with-sidebar">
+      <header className="system-bar page-topbar">
+        <div className="page-heading">
+          <b>更新日志</b>
+          <span>系统功能变更与操作要点</span>
+        </div>
+      </header>
+      <section className="update-log-content">
+        <article>
+          <time>2026-08-30</time>
+          <div>
+            <h2>模板轮廓导入与查找优化</h2>
+            <ul>
+              <li>
+                SVG 轮廓导入新增 circle 与 ellipse 支持，圆形和椭圆自动转换为可编辑贝塞尔曲线。
+              </li>
+              <li>提高曲线预览采样精度并移除圆角边缘的白色内描边，改善模板列表中的圆角显示。</li>
+              <li>模板列表增加名称搜索和匹配数量显示，便于快速定位大量模板。</li>
+              <li>
+                模板管理预览降低为适度清晰的轻量分辨率，并增加下载、解析和渲染进度条；最终 PDF
+                仍使用原始文件生成。
+              </li>
+              <li>
+                新导入图片默认等比覆盖定制区域；右键可将点击位置设为中心并自动补足缩放，同时修复本地开发环境无法加载
+                PDF.js 模板的问题。
+              </li>
+            </ul>
+          </div>
+        </article>
+        <article>
+          <time>2026-08-29</time>
+          <div>
+            <h2>图片位移范围扩展</h2>
+            <ul>
+              <li>图片左右和上下偏移范围从 -50～50 扩展为 -80～80。</li>
+              <li>普通调整栏、放大调整窗口、鼠标拖动和键盘移动统一使用新的范围限制。</li>
+            </ul>
+          </div>
+        </article>
+        <article>
+          <time>2026-08-28</time>
+          <div>
+            <h2>横版模板、存储与 SVG 兼容</h2>
+            <ul>
+              <li>
+                模板管理只优先渲染封面和内页示例，提升模板切换速度；左侧模板列表改为独立滚动。
+              </li>
+              <li>修复远端更新后 PDF.js 动态文件哈希失效导致全部模板停在“正在加载”的问题。</li>
+              <li>
+                横版 PDF 自动读取真实页面尺寸，预览、模板绘制、图片调整和最终导出统一适配横向版面。
+              </li>
+              <li>模板与前景保护层预览改为 2 倍分辨率 PNG，改善放大后的文字和细线清晰度。</li>
+              <li>
+                本地 Worker 开发环境增加数据库模板存储，远程已有 COS
+                配置继续自动使用，无需重新配置。
+              </li>
+              <li>修复模板管理预览固定高度覆盖横版比例的问题，并放大横版双页预览。</li>
+              <li>导入带 rx/ry 参数的 SVG 圆角矩形时，自动生成对应的贝塞尔曲线控制柄。</li>
+              <li>保留圆角轮廓的缩放与位移变换，避免导入后退化为普通直角矩形。</li>
+            </ul>
+          </div>
+        </article>
+        <article>
+          <time>2026-08-27</time>
+          <div>
+            <h2>图片精细调整与批次存档</h2>
+            <ul>
+              <li>图片缩放范围扩展为0.5–5，增加居中与边缘吸附、定界框和等比缩放手柄。</li>
+              <li>订单文件夹支持累积导入，同名订单自动跳过并保留已有调整。</li>
+              <li>增加手动批次存档，可新建、保存、打开、重命名和批量删除批次。</li>
+              <li>订单状态区分表格未匹配、模板待匹配和模板未匹配，并增加安全删除订单入口。</li>
+              <li>每次确认订单已排版后自动保存当前批次，降低刷新导致的数据丢失风险。</li>
+              <li>修复闭合 SVG 路径返回起点时丢失贝塞尔入方向手柄的问题。</li>
+            </ul>
+          </div>
+        </article>
+        <article>
+          <time>2026-08-25</time>
+          <div>
+            <h2>图片放大调整与模板绘制优化</h2>
+            <ul>
+              <li>放大页面支持拖动、滚轮缩放、Option/Alt+滚轮精细旋转和参数拖动条。</li>
+              <li>放大操作时并列显示合成预览图，PageUp/PageDown 可直接切换页面。</li>
+              <li>模板绘制增加撤销、放大十字光标、SVG 矩形与贝塞尔曲线支持。</li>
+              <li>订单文件夹可自动识别根目录中的 Excel 订单表格。</li>
+            </ul>
+          </div>
+        </article>
+      </section>
+    </main>
+  );
+}
+
+function Workshop() {
+  const {user, logout} = useAuth();
+  const [templateTargetOrganizationId, setTemplateTargetOrganizationId] = useState(
+    user.organizationIds.includes('org_default') ? 'org_default' : (user.organizationIds[0] ?? '')
+  );
+  const [accountManagement, setAccountManagement] = useState(
+      !user.permissions.includes('customization') &&
+        !user.permissions.includes('templates') &&
+        user.permissions.includes('accounts')
+    ),
+    [changelogOpen, setChangelogOpen] = useState(false),
+    [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [templates, setTemplates] = useState<TemplateRecord[]>([]),
+    [selectedTemplateId, setSelectedTemplateId] = useState(''),
+    [templatePages, setTemplatePages] = useState<string[]>([]),
+    [allTemplatePages, setAllTemplatePages] = useState<string[]>([]),
+    [templatePageCount, setTemplatePageCount] = useState(13),
+    [templatePageSize, setTemplatePageSize] = useState<PageSize>({width: 595.276, height: 841.89}),
+    [templatePreviewProgress, setTemplatePreviewProgress] = useState(0),
+    [regions, setRegions] = useState<TemplateRegions>(defaultRegions),
+    [hasCover, setHasCover] = useState(true),
+    [pageMode, setPageMode] = useState<PageMode>('all'),
+    [duplex, setDuplex] = useState(false),
+    [rotateCover, setRotateCover] = useState(false),
+    [rotateInner, setRotateInner] = useState(false),
+    [includeOrderInfo, setIncludeOrderInfo] = useState(false),
+    [showMissingTemplates, setShowMissingTemplates] = useState(false),
+    [showTemplateExport, setShowTemplateExport] = useState(false),
+    [exportTemplateIds, setExportTemplateIds] = useState<Set<string>>(new Set()),
+    [editingTemplate, setEditingTemplate] = useState(false),
+    [templateManagement, setTemplateManagement] = useState(
+      !user.permissions.includes('customization') && user.permissions.includes('templates')
+    ),
+    [lightboxPage, setLightboxPage] = useState<number | null>(null),
+    [previewLightbox, setPreviewLightbox] = useState(false),
+    [awaitingNext, setAwaitingNext] = useState(false),
+    [draggingPage, setDraggingPage] = useState<number | null>(null),
+    [snapGuides, setSnapGuides] = useState<SnapGuides | null>(null),
+    [orders, setOrders] = useState<Order[]>([]),
+    [orderSheet, setOrderSheet] = useState<Record<string, OrderSheetRow>>({}),
+    [selectedId, setSelectedId] = useState(''),
+    [selectedPage, setSelectedPage] = useState(0),
+    [search, setSearch] = useState(''),
+    [templateSearch, setTemplateSearch] = useState(''),
+    [filter, setFilter] = useState<Filter>('all'),
+    [skuFilter, setSkuFilter] = useState('all'),
+    [busy, setBusy] = useState(false),
+    [templateBusyLabel, setTemplateBusyLabel] = useState(''),
+    [progress, setProgress] = useState(''),
+    [message, setMessage] = useState('请选择批量订单文件夹'),
+    [batchArchives, setBatchArchives] = useState<BatchArchiveMeta[]>([]),
+    [activeBatchId, setActiveBatchId] = useState(''),
+    [activeBatchName, setActiveBatchName] = useState('未命名批次'),
+    [batchSavedAt, setBatchSavedAt] = useState<number | null>(null),
+    [batchDirty, setBatchDirty] = useState(false),
+    [showBatchManager, setShowBatchManager] = useState(false),
+    [checkedBatchIds, setCheckedBatchIds] = useState<Set<string>>(new Set());
+  const urls = useRef<string[]>([]),
+    invalidTemplateAlert = useRef(''),
+    folderInput = useRef<HTMLInputElement>(null),
+    dragState = useRef<{
+      pointerId: number;
+      orderId: string;
+      photoId: string;
+      page: number;
+      clientX: number;
+      clientY: number;
+      x: number;
+      y: number;
+      regionRect: DOMRect;
+      imageRect: DOMRect;
+    } | null>(null),
+    resizeState = useRef<{
+      pointerId: number;
+      orderId: string;
+      photoId: string;
+      page: number;
+      centerX: number;
+      centerY: number;
+      distance: number;
+      scale: number;
+    } | null>(null),
+    batchTracking = useRef(false);
+  activeTemplatePageSize = templatePageSize;
+  activeTemplatePreviewProgress = templatePreviewProgress;
+  const rotationDrag = useRef<{pointerId: number; startX: number; rotation: number} | null>(null);
+  const [foregroundFile, setForegroundFile] = useState<File | undefined>(),
+    [foregroundPages, setForegroundPages] = useState<string[]>([]);
+  const rotateImported = rotateInner;
+  const selectedTemplate = templates.find((item) => item.id === selectedTemplateId),
+    template = selectedTemplate?.file ?? null;
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--template-page-ratio',
+      `${templatePageSize.width} / ${templatePageSize.height}`
+    );
+    return () => document.documentElement.style.removeProperty('--template-page-ratio');
+  }, [templatePageSize.width, templatePageSize.height]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const file =
+        selectedTemplate?.foregroundFile ??
+        (selectedTemplate?.source === 'custom'
+          ? await loadForeground(selectedTemplate.id)
+          : undefined);
+      if (!cancelled) setForegroundFile(file);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTemplateId, selectedTemplate]);
+  useEffect(() => {
+    const handler = async (event: Event) => {
+      const file = (event as CustomEvent<File>).detail;
+      if (!selectedTemplateId || !file) return;
+      if (selectedTemplate?.source === 'custom') await saveForeground(selectedTemplateId, file);
+      setForegroundFile(file);
+      setTemplates((current) =>
+        current.map((item) =>
+          item.id === selectedTemplateId
+            ? {...item, foregroundFile: file, foregroundUrl: `/api/templates/${item.id}/foreground`}
+            : item
+        )
+      );
+      setMessage(`已为模板“${selectedTemplate?.name.replace(/\.pdf$/i, '') ?? ''}”设置前景保护层`);
+    };
+    window.addEventListener('jht-foreground-file', handler);
+    return () => window.removeEventListener('jht-foreground-file', handler);
+  }, [selectedTemplateId, selectedTemplate]);
+  useEffect(() => {
+    if (!foregroundFile) {
+      setForegroundPages([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const pdfjs = await loadPdfJs();
+        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+        const pdfDocument = await pdfjs.getDocument({
+          data: new Uint8Array(await foregroundFile.arrayBuffer())
+        }).promise;
+        if (pdfDocument.numPages !== templatePageCount)
+          throw new Error(
+            `前景保护层页数 ${pdfDocument.numPages} 与背景模板 ${templatePageCount} 不一致`
+          );
+        const pageNumbers = templatePageNumbers(templatePageCount, hasCover, pageMode),
+          previewPageNumbers = templateManagement
+            ? pageNumbers.slice(0, hasCover ? 2 : 1)
+            : pageNumbers,
+          renderedPages = new Map<number, string>();
+        for (const pageNumber of previewPageNumbers) {
+          const page = await pdfDocument.getPage(pageNumber),
+            viewport = page.getViewport({scale: templateManagement ? 1.2 : 2}),
+            canvas = document.createElement('canvas'),
+            context = canvas.getContext('2d');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          if (context)
+            await page.render({
+              canvas,
+              canvasContext: context,
+              viewport,
+              background: 'rgba(0,0,0,0)'
+            }).promise;
+          renderedPages.set(pageNumber, canvas.toDataURL('image/png'));
+        }
+        if (!cancelled)
+          setForegroundPages(pageNumbers.map((page) => renderedPages.get(page) ?? ''));
+      } catch (error) {
+        if (!cancelled) {
+          setForegroundPages([]);
+          setMessage(error instanceof Error ? error.message : '前景保护层预览失败');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [foregroundFile, templatePageCount, hasCover, pageMode, templateManagement]);
+  const selectedOrder = orders.find((order) => order.id === selectedId) ?? orders[0];
+  const pageOffset = hasCover ? 1 : 0;
+  const selectedPhoto = selectedOrder
+    ? hasCover && selectedPage === 0
+      ? selectedOrder.cover
+      : selectedOrder.arrangement[selectedPage - pageOffset]
+    : undefined;
+  const selectedTransform =
+    selectedPhoto && selectedOrder
+      ? (selectedOrder.transforms[selectedPhoto.id] ?? initialTransform)
+      : initialTransform;
+  const selectedRegion = hasCover && selectedPage === 0 ? regions.cover : regions.inner;
+  const templateBase = selectedTemplate
+    ? safeName(selectedTemplate.name.replace(/\.pdf$/i, ''))
+    : 'template';
+  const readyCount = orders.filter((order) => order.status === 'ready').length,
+    pendingCount = orders.length - readyCount,
+    shipmentCount = orders
+      .filter((order) => order.sheetMatched)
+      .reduce((sum, order) => sum + order.quantity, 0),
+    readyShipmentCount = orders
+      .filter((order) => order.status === 'ready')
+      .reduce((sum, order) => sum + order.quantity, 0),
+    unmatchedCount = orders.filter((order) => !order.sheetMatched).length,
+    missingTemplateOrders = orders.filter(
+      (order) => order.sheetMatched && !matchingTemplate(templates, order.sku)
+    ),
+    missingTemplateCount = missingTemplateOrders.length,
+    missingTemplateNames = [
+      ...new Set(missingTemplateOrders.map((order) => order.sku || 'SKU未提供'))
+    ];
+  const skuOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          orders.map((order) => order.sku).filter((value): value is string => Boolean(value))
+        )
+      ].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [orders]
+  );
+  const visibleOrders = useMemo(
+      () =>
+        orders.filter((order) => {
+          const statusMatches =
+            filter === 'all'
+              ? true
+              : filter === 'unmatched'
+                ? !order.sheetMatched
+                : filter === 'missing-template'
+                  ? Boolean(order.sheetMatched && !matchingTemplate(templates, order.sku))
+                  : order.status === filter;
+          return (
+            statusMatches &&
+            (skuFilter === 'all' || order.sku === skuFilter) &&
+            order.name.toLowerCase().includes(search.toLowerCase())
+          );
+        }),
+      [orders, filter, skuFilter, search, templates]
+    ),
+    visibleTemplates = useMemo(() => {
+      const key = normalized(templateSearch);
+      return key
+        ? templates.filter((item) => normalized(item.name.replace(/\.pdf$/i, '')).includes(key))
+        : templates;
+    }, [templates, templateSearch]),
+    customTemplateCount = templates.filter((item) => item.source === 'custom').length;
+  const duplicateCustomTemplate = (
+    name: string,
+    excludeId?: string,
+    organizationId = templateTargetOrganizationId
+  ) =>
+    templates.find(
+      (item) =>
+        item.source === 'custom' &&
+        item.id !== excludeId &&
+        item.organizationId === organizationId &&
+        normalized(item.name.replace(/\.pdf$/i, '')) === normalized(name.replace(/\.pdf$/i, ''))
+    );
+  const warnDuplicateTemplate = (name: string) => {
+    const text = `自定义模板“${name.replace(/\.pdf$/i, '')}”已经存在，请使用其他名称。`;
+    setMessage(text);
+    window.alert(text);
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [defaults, custom] = await Promise.all([loadDefaultTemplates(), loadTemplates()]),
+          items = [...defaults, ...custom];
+        setTemplates(items);
+        setSelectedTemplateId(items[0]?.id ?? '');
+        setMessage(
+          items.length
+            ? `已加载 ${defaults.length} 个内置模板和 ${custom.length} 个可访问自定义模板`
+            : '当前没有模板，可导入模板或稍后更新内置模板包'
+        );
+      } catch (error) {
+        try {
+          const custom = await loadTemplates();
+          setTemplates(custom);
+          setSelectedTemplateId(custom[0]?.id ?? '');
+        } catch {}
+        setMessage(error instanceof Error ? error.message : '模板加载失败');
+      }
+    })();
+    return () => urls.current.forEach(URL.revokeObjectURL);
+  }, []);
+  useEffect(() => {
+    listBatchArchives(String(user.id))
+      .then(setBatchArchives)
+      .catch((error) => setMessage(error instanceof Error ? error.message : '批次存档读取失败'));
+  }, [user.id]);
+  useEffect(() => {
+    if (!batchTracking.current) {
+      batchTracking.current = true;
+      return;
+    }
+    setBatchDirty(true);
+  }, [orders, orderSheet, includeOrderInfo]);
+  useEffect(() => {
+    if (!selectedTemplateId || !selectedTemplate) return;
+    setTemplatePreviewProgress(0);
+    setRegions(selectedTemplate.regions ?? defaultRegions);
+    setHasCover(selectedTemplate.hasCover !== false);
+    setPageMode(selectedTemplate.pageMode ?? 'all');
+    setDuplex(selectedTemplate.duplex ?? [24, 25].includes(selectedTemplate.pageCount ?? 0));
+    setRotateCover(selectedTemplate.rotateCover ?? false);
+    setRotateInner(selectedTemplate.rotateInner ?? false);
+    setSelectedPage(0);
+  }, [selectedTemplateId, selectedTemplate]);
+  useEffect(() => {
+    if (!selectedTemplate || selectedTemplate.file || !selectedTemplate.fileUrl) return;
+    let cancelled = false;
+    setTemplatePreviewProgress(1);
+    (async () => {
+      try {
+        const file = await fetchPdfFile(
+          selectedTemplate.fileUrl!,
+          selectedTemplate.fileName ?? selectedTemplate.name,
+          (percent) => {
+            if (!cancelled) setTemplatePreviewProgress(Math.max(1, Math.round(percent * 0.4)));
+          }
+        );
+        if (!cancelled)
+          setTemplates((current) =>
+            current.map((item) => (item.id === selectedTemplate.id ? {...item, file} : item))
+          );
+      } catch (error) {
+        if (!cancelled) {
+          setTemplatePreviewProgress(0);
+          setMessage(error instanceof Error ? error.message : '模板文件读取失败');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTemplate]);
+  useEffect(() => {
+    if (!template) {
+      setTemplatePages([]);
+      setAllTemplatePages([]);
+      setTemplatePreviewProgress(0);
+      return;
+    }
+    let cancelled = false;
+    setTemplatePreviewProgress((current) => Math.max(42, current));
+    (async () => {
+      try {
+        const pdfjs = await loadPdfJs();
+        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+        const pdfDocument = await pdfjs.getDocument({
+            data: new Uint8Array(await template.arrayBuffer())
+          }).promise,
+          pageCount = pdfDocument.numPages;
+        if (![12, 13, 24, 25].includes(pageCount))
+          throw new Error(`模板必须是12、13、24或25页，实际为 ${pageCount} 页`);
+        const pageNumbers = templatePageNumbers(pageCount, hasCover, pageMode);
+        if (!pageNumbers.length) throw new Error('当前模板参数没有可插图的页面');
+        const allPages = Array<string>(pageCount).fill(''),
+          renderPageNumbers = [
+            ...new Set(
+              templateManagement
+                ? [1, ...pageNumbers.slice(0, hasCover ? 2 : 1)]
+                : [1, ...pageNumbers]
+            )
+          ];
+        let detectedPageSize: PageSize | undefined;
+        for (const [renderIndex, pageNumber] of renderPageNumbers.entries()) {
+          const page = await pdfDocument.getPage(pageNumber),
+            baseViewport = page.getViewport({scale: 1}),
+            viewport = page.getViewport({scale: templateManagement ? 1.2 : 2}),
+            canvas = document.createElement('canvas'),
+            context = canvas.getContext('2d');
+          if (pageNumber === 1)
+            detectedPageSize = {width: baseViewport.width, height: baseViewport.height};
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          if (context) await page.render({canvas, canvasContext: context, viewport}).promise;
+          allPages[pageNumber - 1] = canvas.toDataURL('image/png');
+          if (!cancelled)
+            setTemplatePreviewProgress(
+              45 + Math.round(((renderIndex + 1) / renderPageNumbers.length) * 55)
+            );
+        }
+        if (!cancelled) {
+          setTemplatePageCount(pageCount);
+          if (detectedPageSize) setTemplatePageSize(detectedPageSize);
+          setTemplates((current) =>
+            current.some((item) => item.id === selectedTemplateId && item.pageCount !== pageCount)
+              ? current.map((item) =>
+                  item.id === selectedTemplateId ? {...item, pageCount} : item
+                )
+              : current
+          );
+          setAllTemplatePages(allPages);
+          setTemplatePages(pageNumbers.map((pageNumber) => allPages[pageNumber - 1]));
+          setSelectedPage(0);
+          setTemplatePreviewProgress(100);
+          setMessage(
+            `模板参数：${pageCount} 页 · ${detectedPageSize && detectedPageSize.width > detectedPageSize.height ? '横版' : '竖版'} · ${hasCover ? '有封面' : '无封面'} · ${pageMode === 'all' ? '全部页面插图' : pageMode === 'odd' ? '奇数页插图' : '偶数页插图'}`
+          );
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTemplatePages([]);
+          setAllTemplatePages([]);
+          setTemplatePreviewProgress(0);
+          const errorMessage = error instanceof Error ? error.message : '模板预览失败';
+          setMessage(errorMessage);
+          if (errorMessage.startsWith('模板必须是')) {
+            const alertKey = `${selectedTemplateId}:${errorMessage}`;
+            if (invalidTemplateAlert.current !== alertKey) {
+              invalidTemplateAlert.current = alertKey;
+              window.alert(
+                `模板“${selectedTemplate?.name.replace(/\.pdf$/i, '') ?? '未命名模板'}”无法预览。\n\n${errorMessage}。\n请检查是否导入了正确的模板文件。`
+              );
+            }
+          }
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [template, selectedTemplateId, hasCover, pageMode, templateManagement]);
+  useEffect(() => {
+    if (!selectedOrder?.sku) return;
+    const match = matchingTemplate(templates, selectedOrder.sku);
+    if (match) {
+      if (match.id !== selectedTemplateId) setSelectedTemplateId(match.id);
+      setMessage(
+        `订单 ${selectedOrder.name} 已按 SKU 自动匹配${match.source === 'custom' ? '自定义' : '内置'}模板：${match.name.replace(/\.pdf$/i, '')}`
+      );
+    } else setMessage(`订单 ${selectedOrder.name} 的 SKU“${selectedOrder.sku}”尚无对应模板`);
+  }, [selectedOrder?.id, selectedOrder?.sku]);
+
+  const addPhoto = (file: File): Photo => {
+    const url = URL.createObjectURL(file);
+    urls.current.push(url);
+    return {
+      id: `${file.webkitRelativePath || file.name}-${file.size}-${crypto.randomUUID()}`,
+      file,
+      url
+    };
+  };
+  const importFolder = async (event: ChangeEvent<HTMLInputElement>) => {
+    const allFiles = Array.from(event.target.files ?? []),
+      workbook = allFiles.find(
+        (file) =>
+          /\.xlsx$/i.test(file.name) &&
+          file.webkitRelativePath.split('/').filter(Boolean).length === 2
+      );
+    let activeSheet = orderSheet;
+    if (workbook) {
+      try {
+        const rows = await parseOrderWorkbook(workbook);
+        activeSheet = Object.fromEntries(rows.map((row) => [normalized(row.customId), row]));
+        setOrderSheet(activeSheet);
+      } catch (error) {
+        setMessage(
+          error instanceof Error
+            ? `文件夹内订单表格解析失败：${error.message}`
+            : '文件夹内订单表格解析失败'
+        );
+        event.target.value = '';
+        return;
+      }
+    }
+    const files = allFiles.filter(
+        (file) => file.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(file.name)
+      ),
+      groups = new Map<string, File[]>();
+    for (const file of files) {
+      const parts = file.webkitRelativePath.split('/').filter(Boolean),
+        name = parts.length >= 3 ? parts[1] : parts[0] || '未命名订单';
+      groups.set(name, [...(groups.get(name) ?? []), file]);
+    }
+    const existingNames = new Set(orders.map((order) => normalized(order.name)));
+    let invalid = 0,
+      duplicates = 0;
+    const next: Order[] = [...groups.entries()]
+      .sort(([a], [b]) => a.localeCompare(b, 'zh-CN'))
+      .flatMap(([name, groupFiles]) => {
+        if (existingNames.has(normalized(name))) {
+          duplicates++;
+          return [];
+        }
+        const numbered = groupFiles
+            .map((file) => ({file, sequence: sequenceOf(file.name)}))
+            .filter((item): item is {file: File; sequence: number} => item.sequence !== null)
+            .sort(
+              (a, b) => a.sequence - b.sequence || a.file.name.localeCompare(b.file.name, 'zh-CN')
+            ),
+          coverFile = (hasCover ? numbered.find((item) => item.sequence === 1) : numbered[0])?.file,
+          insideFiles = (hasCover ? numbered.filter((item) => item.sequence !== 1) : numbered).map(
+            (item) => item.file
+          ),
+          previewFile = groupFiles.find((file) => /合成预览图/.test(file.name));
+        if (!coverFile || !insideFiles.length) {
+          invalid++;
+          return [];
+        }
+        const cover = addPhoto(coverFile),
+          preview = previewFile ? addPhoto(previewFile) : undefined,
+          photos = insideFiles.map(addPhoto),
+          transforms: Record<string, Transform> = {[cover.id]: initialTransform},
+          sheet = activeSheet[normalized(name)];
+        photos.forEach((photo) => (transforms[photo.id] = initialTransform));
+        return [
+          {
+            id: crypto.randomUUID(),
+            name,
+            cover,
+            preview,
+            photos,
+            arrangement: arrangeInSequence(photos),
+            transforms,
+            status: 'pending',
+            sheetMatched: Boolean(sheet),
+            sku: sheet?.sku || undefined,
+            warehouse: sheet?.warehouse,
+            quantity: sheet?.quantity ?? 1
+          }
+        ];
+      });
+    await Promise.all(
+      next.map(async (order) => {
+        order.transforms[order.cover.id] = {
+          ...initialTransform,
+          scale: await suitableScale(order.cover.file, regions.cover, templatePageSize)
+        };
+        await Promise.all(
+          order.photos.map(async (photo) => {
+            order.transforms[photo.id] = {
+              ...initialTransform,
+              scale: await suitableScale(photo.file, regions.inner, templatePageSize)
+            };
+          })
+        );
+      })
+    );
+    setOrders((current) => [
+      ...current.map((order) => {
+        const sheet = activeSheet[normalized(order.name)];
+        return sheet
+          ? {
+              ...order,
+              sheetMatched: true,
+              sku: sheet.sku || undefined,
+              warehouse: sheet.warehouse,
+              quantity: sheet.quantity
+            }
+          : order;
+      }),
+      ...next
+    ]);
+    if (next.length) {
+      setSelectedId(next[0].id);
+      setSelectedPage(0);
+    }
+    const matched = next.filter((order) => order.sheetMatched).length,
+      details = [`新增 ${next.length} 个订单`];
+    if (duplicates) details.push(`跳过 ${duplicates} 个已存在的同名订单（原调整未覆盖）`);
+    if (invalid) details.push(`跳过 ${invalid} 个缺少有效图片的文件夹`);
+    if (Object.keys(activeSheet).length)
+      details.push(`${workbook ? '已自动读取订单表格，' : ''}新订单匹配 ${matched} 个`);
+    setMessage(groups.size ? details.join('；') : '没有找到符合“消费者上传原图+序号”的订单');
+    event.target.value = '';
+  };
+  const importOrderSheet = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    try {
+      const rows = await parseOrderWorkbook(file),
+        mapping = Object.fromEntries(rows.map((row) => [normalized(row.customId), row]));
+      setOrderSheet(mapping);
+      let matched = 0;
+      const nextOrders = orders.map((order) => {
+        const row = mapping[normalized(order.name)];
+        if (!row)
+          return {...order, sheetMatched: false, sku: undefined, warehouse: undefined, quantity: 1};
+        matched++;
+        return {
+          ...order,
+          sheetMatched: true,
+          sku: row.sku || undefined,
+          warehouse: row.warehouse,
+          quantity: row.quantity
+        };
+      });
+      setOrders(nextOrders);
+      const missingSkus = [
+        ...new Set(
+          rows.map((row) => row.sku).filter((sku) => sku && !matchingTemplate(templates, sku))
+        )
+      ];
+      setMessage(
+        `已导入 ${rows.length} 条订单资料${orders.length ? `，匹配当前订单 ${matched} 个` : ''}${missingSkus.length ? `；模板：未匹配 · SKU：${missingSkus.join('、')}` : ''}`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '订单表格导入失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const chooseTemplates = async (event: ChangeEvent<HTMLInputElement>) => {
+    const candidates = Array.from(event.target.files ?? []).filter((file) =>
+      /\.pdf$/i.test(file.name)
+    );
+    event.target.value = '';
+    if (!candidates.length || busy) return;
+    const known = new Set(
+        templates
+          .filter(
+            (item) =>
+              item.source === 'custom' && item.organizationId === templateTargetOrganizationId
+          )
+          .map((item) => normalized(item.name.replace(/\.pdf$/i, '')))
+      ),
+      files: File[] = [],
+      duplicates: string[] = [];
+    for (const file of candidates) {
+      const name = file.name.replace(/\.pdf$/i, ''),
+        key = normalized(name);
+      if (known.has(key)) {
+        duplicates.push(name);
+        continue;
+      }
+      known.add(key);
+      files.push(file);
+    }
+    if (!files.length) {
+      warnDuplicateTemplate(duplicates[0]);
+      return;
+    }
+    setBusy(true);
+    setTemplateBusyLabel(`正在导入 ${files.length} 个模板…`);
+    try {
+      const uploaded = await saveTemplates(templateTargetOrganizationId, files),
+        custom = await loadTemplates(),
+        next = [...templates.filter((item) => item.source === 'default'), ...custom];
+      setTemplates(next);
+      setSelectedTemplateId(uploaded[0]?.id ?? custom[0]?.id ?? '');
+      setMessage(
+        `自定义模板已加入 ${files.length} 个文件并保存到所选组织模板仓库${duplicates.length ? `；已跳过重名模板：${duplicates.join('、')}` : ''}`
+      );
+      if (duplicates.length)
+        window.alert(
+          `以下自定义模板名称在所选组织内已经存在，未重复导入：\n${duplicates.join('\n')}`
+        );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '模板导入失败');
+    } finally {
+      setBusy(false);
+      setTemplateBusyLabel('');
+    }
+  };
+  const ensureTemplateFile = async (item: TemplateRecord) => {
+    if (item.file) return item;
+    const file = await fetchPdfFile(item.fileUrl!, item.fileName ?? item.name),
+      next = {...item, file};
+    setTemplates((current) =>
+      current.map((template) => (template.id === item.id ? next : template))
+    );
+    return next;
+  };
+  const duplicateTemplate = async () => {
+    if (!selectedTemplate || busy) return;
+    const baseName = selectedTemplate.name.replace(/\.pdf$/i, ''),
+      name = window.prompt('请输入复制后的模板名称', `${baseName}-副本`)?.trim();
+    if (!name) return;
+    if (duplicateCustomTemplate(name)) {
+      warnDuplicateTemplate(name);
+      return;
+    }
+    setBusy(true);
+    setTemplateBusyLabel('正在复制模板…');
+    try {
+      const source = await ensureTemplateFile(selectedTemplate),
+        file = new File([await source.file!.arrayBuffer()], `${safeName(name) || '模板副本'}.pdf`, {
+          type: 'application/pdf'
+        }),
+        copiedRegions = JSON.parse(JSON.stringify(regions)) as TemplateRegions,
+        copy = await uploadManagedTemplate(
+          templateTargetOrganizationId,
+          file,
+          name,
+          {
+            regions: copiedRegions,
+            hasCover,
+            pageCount: templatePageCount,
+            pageMode,
+            duplex,
+            rotateCover,
+            rotateInner
+          },
+          source.foregroundFile
+        );
+      setTemplates((current) => [...current, copy]);
+      setSelectedTemplateId(copy.id);
+      setMessage(`已复制模板“${baseName}”为“${name}”，可直接编辑修改`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '模板复制失败');
+    } finally {
+      setBusy(false);
+      setTemplateBusyLabel('');
+    }
+  };
+  const deleteTemplate = async () => {
+    if (!selectedTemplate || busy) return;
+    if (!window.confirm(`确定删除模板“${selectedTemplate.name.replace(/\.pdf$/i, '')}”吗？`))
+      return;
+    setBusy(true);
+    setTemplateBusyLabel('正在删除模板…');
+    try {
+      if (selectedTemplate.source === 'custom') await deleteStoredTemplate(selectedTemplate.id);
+      else {
+        const hidden: string[] = JSON.parse(
+            localStorage.getItem('jht-hidden-default-templates') ?? '[]'
+          ),
+          sourceId = selectedTemplate.id.replace(/^default:/, '');
+        localStorage.setItem(
+          'jht-hidden-default-templates',
+          JSON.stringify([...new Set([...hidden, sourceId])])
+        );
+      }
+      const next = templates.filter((item) => item.id !== selectedTemplate.id);
+      setTemplates(next);
+      setSelectedTemplateId(next[0]?.id ?? '');
+      setMessage(`已删除模板“${selectedTemplate.name.replace(/\.pdf$/i, '')}”`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '模板删除失败');
+    } finally {
+      setBusy(false);
+      setTemplateBusyLabel('');
+    }
+  };
+  const clearCustomTemplates = async () => {
+    const custom = templates.filter((item) => item.source === 'custom');
+    if (!custom.length || busy) return;
+    if (
+      !window.confirm(
+        `确定清除可访问组织中的 ${custom.length} 个自定义模板吗？内置模板不会被删除。`
+      )
+    )
+      return;
+    setBusy(true);
+    setTemplateBusyLabel(`正在清空 ${custom.length} 个模板…`);
+    try {
+      await clearStoredTemplates();
+      const defaults = templates.filter((item) => item.source === 'default');
+      setTemplates(defaults);
+      setSelectedTemplateId(defaults[0]?.id ?? '');
+      setMessage(`已清除 ${custom.length} 个可访问自定义模板，内置模板已保留`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '清空自定义模板失败');
+    } finally {
+      setBusy(false);
+      setTemplateBusyLabel('');
+    }
+  };
+  const updateOrder = (id: string, updater: (order: Order) => Order) =>
+    setOrders((current) => current.map((order) => (order.id === id ? updater(order) : order)));
+  const deleteOrder = (order: Order) => {
+    if (
+      !window.confirm(
+        `确定删除订单“${order.name}”吗？\n\n删除后需要再次点击“保存批次”才会写入存档。`
+      )
+    )
+      return;
+    const index = orders.findIndex((item) => item.id === order.id),
+      remaining = orders.filter((item) => item.id !== order.id),
+      next = remaining[Math.min(index, remaining.length - 1)];
+    setOrders(remaining);
+    if (selectedId === order.id) {
+      setSelectedId(next?.id ?? '');
+      setSelectedPage(0);
+      setLightboxPage(null);
+    }
+    const removedUrls = [
+      order.cover.url,
+      ...order.photos.map((photo) => photo.url),
+      ...(order.preview ? [order.preview.url] : [])
+    ];
+    removedUrls.forEach(URL.revokeObjectURL);
+    urls.current = urls.current.filter((url) => !removedUrls.includes(url));
+    setMessage(`已从当前批次删除订单“${order.name}”，请保存批次使修改生效`);
+  };
+  const refreshBatchArchives = () => listBatchArchives(String(user.id)).then(setBatchArchives);
+  const newBatch = () => {
+    if (batchDirty && !window.confirm('当前批次有尚未保存的修改，确定新建批次吗？')) return;
+    const date = new Date().toLocaleDateString('sv-SE'),
+      pattern = new RegExp(`^${date} 第(\\d+)批$`),
+      sequence =
+        Math.max(0, ...batchArchives.map((batch) => Number(batch.name.match(pattern)?.[1] ?? 0))) +
+        1,
+      name = `${date} 第${sequence}批`;
+    batchTracking.current = false;
+    setOrders([]);
+    setOrderSheet({});
+    setSelectedId('');
+    setSelectedPage(0);
+    setActiveBatchId('');
+    setActiveBatchName(name);
+    setBatchSavedAt(null);
+    setBatchDirty(false);
+    setMessage(`已开始新批次“${name}”，导入订单后点击“保存批次”`);
+  };
+  const saveCurrentBatch = async () => {
+    if (!orders.length) {
+      setMessage('当前批次没有订单，不能保存');
+      return;
+    }
+    const name = activeBatchName.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      const saved = await saveBatchArchive(String(user.id), {
+        id: activeBatchId || undefined,
+        name,
+        orders,
+        selectedId,
+        includeOrderInfo,
+        orderSheet
+      });
+      setActiveBatchId(saved.id);
+      setActiveBatchName(saved.name);
+      setBatchSavedAt(saved.updatedAt);
+      setBatchDirty(false);
+      await refreshBatchArchives();
+      setMessage(`批次“${saved.name}”已保存，共 ${saved.orderCount} 个订单`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批次保存失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const openBatch = async (id: string) => {
+    if (!id || id === activeBatchId) return;
+    if (batchDirty && !window.confirm('当前批次有尚未保存的修改，确定切换到其他存档吗？')) return;
+    setBusy(true);
+    try {
+      const loaded = await loadBatchArchive(String(user.id), id);
+      if (!loaded) throw new Error('找不到该批次存档');
+      const restoredOrders: Order[] = loaded.archive.orders.flatMap((stored) => {
+        try {
+          const photosById = new Map<string, Photo>(),
+            restorePhoto = (item: {id: string; fileKey: string}) => {
+              const file = loaded.files.get(item.fileKey);
+              if (!file) throw new Error('存档图片缺失');
+              const photo = {id: item.id, file, url: URL.createObjectURL(file)};
+              urls.current.push(photo.url);
+              photosById.set(item.id, photo);
+              return photo;
+            },
+            cover = restorePhoto(stored.cover),
+            photos = stored.photos.map(restorePhoto),
+            preview = stored.preview ? restorePhoto(stored.preview) : undefined,
+            arrangement = stored.arrangementIds
+              .map((photoId) => photosById.get(photoId))
+              .filter((photo): photo is Photo => Boolean(photo));
+          return arrangement.length ? [{...stored, cover, photos, preview, arrangement}] : [];
+        } catch {
+          return [];
+        }
+      });
+      batchTracking.current = false;
+      setOrders(restoredOrders);
+      setOrderSheet(loaded.archive.orderSheet ?? {});
+      setIncludeOrderInfo(loaded.archive.includeOrderInfo);
+      setSelectedId(
+        restoredOrders.some((order) => order.id === loaded.archive.selectedId)
+          ? loaded.archive.selectedId
+          : (restoredOrders[0]?.id ?? '')
+      );
+      setSelectedPage(0);
+      setActiveBatchId(loaded.archive.id);
+      setActiveBatchName(loaded.archive.name);
+      setBatchSavedAt(loaded.archive.updatedAt);
+      setBatchDirty(false);
+      setMessage(`已打开批次“${loaded.archive.name}”，共 ${restoredOrders.length} 个订单`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批次打开失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const renameBatch = async () => {
+    if (!activeBatchId) {
+      setMessage('请先打开一个已经保存的批次');
+      return;
+    }
+    const name = window.prompt('请输入新的批次名称', activeBatchName)?.trim();
+    if (!name || name === activeBatchName) return;
+    if (
+      batchArchives.some(
+        (batch) => batch.id !== activeBatchId && normalized(batch.name) === normalized(name)
+      )
+    ) {
+      window.alert('批次名称已经存在，请换一个名称');
+      return;
+    }
+    try {
+      await renameBatchArchive(String(user.id), activeBatchId, name);
+      setActiveBatchName(name);
+      await refreshBatchArchives();
+      setMessage(`批次已重命名为“${name}”`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批次重命名失败');
+    }
+  };
+  const removeCheckedBatches = async () => {
+    const ids = [...checkedBatchIds];
+    if (!ids.length) return;
+    if (!window.confirm(`确定永久删除选中的 ${ids.length} 个批次存档吗？`)) return;
+    try {
+      await deleteBatchArchives(String(user.id), ids);
+      if (activeBatchId && checkedBatchIds.has(activeBatchId)) {
+        setActiveBatchId('');
+        setBatchSavedAt(null);
+        setBatchDirty(true);
+      }
+      setCheckedBatchIds(new Set());
+      setShowBatchManager(false);
+      await refreshBatchArchives();
+      setMessage(`已删除 ${ids.length} 个批次存档`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批量删除批次失败');
+    }
+  };
+  const updateTransform = (patch: Partial<Transform>) => {
+    if (!selectedOrder || !selectedPhoto) return;
+    updateOrder(selectedOrder.id, (order) => {
+      const next = {...(order.transforms[selectedPhoto.id] ?? initialTransform), ...patch};
+      next.x = Math.max(MIN_IMAGE_OFFSET, Math.min(MAX_IMAGE_OFFSET, next.x));
+      next.y = Math.max(MIN_IMAGE_OFFSET, Math.min(MAX_IMAGE_OFFSET, next.y));
+      return {
+        ...order,
+        transforms: {...order.transforms, [selectedPhoto.id]: next},
+        status: 'pending'
+      };
+    });
+  };
+  const updateTransformNumber = (key: keyof Transform, raw: string, min: number, max: number) => {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return;
+    updateTransform({[key]: Math.max(min, Math.min(max, value))});
+  };
+  const beginImageDrag = (event: ReactPointerEvent<HTMLDivElement>, page: number, photo: Photo) => {
+    if (
+      !selectedOrder ||
+      event.button !== 0 ||
+      (event.target as HTMLElement).closest('.bound-handle')
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    const regionElement = event.currentTarget.querySelector('.custom-photo'),
+      imageElement = event.currentTarget.querySelector('[data-image-bounds]'),
+      regionRect = regionElement?.getBoundingClientRect(),
+      imageRect = imageElement?.getBoundingClientRect() ?? regionRect,
+      transform = selectedOrder.transforms[photo.id] ?? initialTransform;
+    if (!regionRect || !imageRect) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragState.current = {
+      pointerId: event.pointerId,
+      orderId: selectedOrder.id,
+      photoId: photo.id,
+      page,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      x: transform.x,
+      y: transform.y,
+      regionRect,
+      imageRect
+    };
+    setSelectedPage(page);
+    setDraggingPage(page);
+  };
+  const centerImage = (event: ReactMouseEvent<HTMLDivElement>, page: number, photo: Photo) => {
+    const area = event.currentTarget.querySelector('.custom-photo')?.getBoundingClientRect(),
+      image = event.currentTarget.querySelector(
+        '.photo-transform-layer>img'
+      ) as HTMLImageElement | null;
+    if (
+      !selectedOrder ||
+      !area ||
+      !image ||
+      event.clientX < area.left ||
+      event.clientX > area.right ||
+      event.clientY < area.top ||
+      event.clientY > area.bottom
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    const transform = selectedOrder.transforms[photo.id] ?? initialTransform,
+      templateRotation = hasCover && page === 0 ? rotateCover : rotateInner,
+      next = anchoredCoverTransform(
+        area,
+        image,
+        event.clientX,
+        event.clientY,
+        transform,
+        (transform.rotation ?? 0) + (templateRotation ? 180 : 0)
+      );
+    setSelectedPage(page);
+    setOrders((current) =>
+      current.map((order) =>
+        order.id === selectedOrder.id
+          ? {...order, transforms: {...order.transforms, [photo.id]: next}}
+          : order
+      )
+    );
+    setSnapGuides({page, vertical: 'center', horizontal: 'center'});
+    window.setTimeout(
+      () => setSnapGuides((current) => (current?.page === page ? null : current)),
+      450
+    );
+    setMessage(
+      `${hasCover && page === 0 ? '封面' : months[page - pageOffset]}图片的右键定位点已居中，并自动补足缩放避免留白`
+    );
+  };
+  const moveImageDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resizing = resizeState.current;
+    if (resizing && resizing.pointerId === event.pointerId) {
+      event.preventDefault();
+      const distance = Math.max(
+          1,
+          Math.hypot(event.clientX - resizing.centerX, event.clientY - resizing.centerY)
+        ),
+        scale = Math.max(
+          MIN_IMAGE_SCALE,
+          Math.min(
+            MAX_IMAGE_SCALE,
+            Number(((resizing.scale * distance) / resizing.distance).toFixed(2))
+          )
+        );
+      updateOrder(resizing.orderId, (order) => ({
+        ...order,
+        transforms: {
+          ...order.transforms,
+          [resizing.photoId]: {...(order.transforms[resizing.photoId] ?? initialTransform), scale}
+        },
+        status: 'pending'
+      }));
+      return;
+    }
+    const drag = dragState.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    let dx = event.clientX - drag.clientX,
+      dy = event.clientY - drag.clientY;
+    const regionCenterX = drag.regionRect.left + drag.regionRect.width / 2,
+      regionCenterY = drag.regionRect.top + drag.regionRect.height / 2,
+      imageCenterX = drag.imageRect.left + drag.imageRect.width / 2 + dx,
+      imageCenterY = drag.imageRect.top + drag.imageRect.height / 2 + dy,
+      xCandidates = [
+        {
+          distance: Math.abs(imageCenterX - regionCenterX),
+          correction: regionCenterX - imageCenterX,
+          guide: 'center' as const
+        },
+        {
+          distance: Math.abs(drag.imageRect.left + dx - drag.regionRect.left),
+          correction: drag.regionRect.left - (drag.imageRect.left + dx),
+          guide: 'left' as const
+        },
+        {
+          distance: Math.abs(drag.imageRect.right + dx - drag.regionRect.right),
+          correction: drag.regionRect.right - (drag.imageRect.right + dx),
+          guide: 'right' as const
+        }
+      ],
+      yCandidates = [
+        {
+          distance: Math.abs(imageCenterY - regionCenterY),
+          correction: regionCenterY - imageCenterY,
+          guide: 'center' as const
+        },
+        {
+          distance: Math.abs(drag.imageRect.top + dy - drag.regionRect.top),
+          correction: drag.regionRect.top - (drag.imageRect.top + dy),
+          guide: 'top' as const
+        },
+        {
+          distance: Math.abs(drag.imageRect.bottom + dy - drag.regionRect.bottom),
+          correction: drag.regionRect.bottom - (drag.imageRect.bottom + dy),
+          guide: 'bottom' as const
+        }
+      ],
+      xSnap = xCandidates.sort((a, b) => a.distance - b.distance)[0],
+      ySnap = yCandidates.sort((a, b) => a.distance - b.distance)[0],
+      guides: SnapGuides = {page: drag.page};
+    if (xSnap.distance <= SNAP_TOLERANCE) {
+      dx += xSnap.correction;
+      guides.vertical = xSnap.guide;
+    }
+    if (ySnap.distance <= SNAP_TOLERANCE) {
+      dy += ySnap.correction;
+      guides.horizontal = ySnap.guide;
+    }
+    setSnapGuides(guides.vertical || guides.horizontal ? guides : null);
+    const x = Math.max(
+        MIN_IMAGE_OFFSET,
+        Math.min(MAX_IMAGE_OFFSET, drag.x + (dx / drag.regionRect.width) * 100)
+      ),
+      y = Math.max(
+        MIN_IMAGE_OFFSET,
+        Math.min(MAX_IMAGE_OFFSET, drag.y + (dy / drag.regionRect.height) * 100)
+      );
+    updateOrder(drag.orderId, (order) => ({
+      ...order,
+      transforms: {
+        ...order.transforms,
+        [drag.photoId]: {...(order.transforms[drag.photoId] ?? initialTransform), x, y}
+      },
+      status: 'pending'
+    }));
+  };
+  const endImageDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const activePointer = dragState.current?.pointerId ?? resizeState.current?.pointerId;
+    if (activePointer !== event.pointerId) return;
+    dragState.current = null;
+    resizeState.current = null;
+    setDraggingPage(null);
+    setSnapGuides(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const beginImageResize = (
+    event: ReactPointerEvent<HTMLSpanElement>,
+    page: number,
+    photo: Photo
+  ) => {
+    if (!selectedOrder || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const interaction = event.currentTarget.closest('.page-interaction'),
+      region = interaction?.querySelector('.custom-photo')?.getBoundingClientRect(),
+      transform = selectedOrder.transforms[photo.id] ?? initialTransform;
+    if (!region) return;
+    const centerX = region.left + region.width / 2,
+      centerY = region.top + region.height / 2;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeState.current = {
+      pointerId: event.pointerId,
+      orderId: selectedOrder.id,
+      photoId: photo.id,
+      page,
+      centerX,
+      centerY,
+      distance: Math.max(1, Math.hypot(event.clientX - centerX, event.clientY - centerY)),
+      scale: transform.scale
+    };
+    setSelectedPage(page);
+    setDraggingPage(page);
+  };
+  const adjustImageWithWheel = (
+    event: ReactWheelEvent<HTMLDivElement>,
+    page: number,
+    photo: Photo
+  ) => {
+    if (!selectedOrder) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const transform = selectedOrder.transforms[photo.id] ?? initialTransform,
+      step = event.deltaY < 0 ? 1 : -1,
+      next = event.altKey
+        ? {rotation: Math.max(-180, Math.min(180, (transform.rotation ?? 0) + step))}
+        : {
+            scale: Math.max(
+              MIN_IMAGE_SCALE,
+              Math.min(MAX_IMAGE_SCALE, Number((transform.scale + step * 0.05).toFixed(2)))
+            )
+          };
+    setSelectedPage(page);
+    updateOrder(selectedOrder.id, (order) => ({
+      ...order,
+      transforms: {
+        ...order.transforms,
+        [photo.id]: {...(order.transforms[photo.id] ?? initialTransform), ...next}
+      },
+      status: 'pending'
+    }));
+  };
+  const beginRotationDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!selectedPhoto || event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    rotationDrag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      rotation: selectedTransform.rotation ?? 0
+    };
+  };
+  const moveRotationDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = rotationDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const raw = drag.rotation + (event.clientX - drag.startX) / 2,
+      rotation = Math.max(-180, Math.min(180, Math.round(raw)));
+    updateTransform({rotation});
+  };
+  const endRotationDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = rotationDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    rotationDrag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const resetTransform = () => updateTransform(initialTransform);
+  const movePage = (index: number, direction: -1 | 1) => {
+    if (!selectedOrder) return;
+    const target = index + direction;
+    if (target < 0 || target > 11) return;
+    updateOrder(selectedOrder.id, (order) => {
+      const next = [...order.arrangement];
+      [next[index], next[target]] = [next[target], next[index]];
+      return {...order, arrangement: next, status: 'pending'};
+    });
+    setSelectedPage(target + pageOffset);
+  };
+  const choosePagePhoto = (index: number, photoId: string) => {
+    if (!selectedOrder) return;
+    updateOrder(selectedOrder.id, (order) => {
+      const photo = order.photos.find((item) => item.id === photoId);
+      if (!photo) return order;
+      const arrangement = [...order.arrangement];
+      arrangement[index] = photo;
+      return {...order, arrangement, status: 'pending'};
+    });
+    setSelectedPage(index + pageOffset);
+  };
+  const selectNextPending = () => {
+    setAwaitingNext(false);
+    if (!orders.length) return;
+    const start = Math.max(
+      0,
+      orders.findIndex((order) => order.id === selectedOrder?.id)
+    );
+    for (let step = 1; step < orders.length; step++) {
+      const order = orders[(start + step) % orders.length];
+      if (order.status === 'pending') {
+        setSelectedId(order.id);
+        setSelectedPage(0);
+        setMessage(`已切换到待排版订单：${order.name}`);
+        return;
+      }
+    }
+    setMessage('没有其他待排版订单');
+  };
+  const autoSaveConfirmedBatch = async (
+    nextOrders: Order[],
+    orderName: string,
+    keyboard: boolean
+  ) => {
+    const date = new Date().toLocaleDateString('sv-SE'),
+      pattern = new RegExp(`^${date} 第(\\d+)批$`),
+      sequence =
+        Math.max(0, ...batchArchives.map((batch) => Number(batch.name.match(pattern)?.[1] ?? 0))) +
+        1,
+      name =
+        !activeBatchId && activeBatchName === '未命名批次'
+          ? `${date} 第${sequence}批`
+          : activeBatchName;
+    try {
+      const saved = await saveBatchArchive(String(user.id), {
+        id: activeBatchId || undefined,
+        name,
+        orders: nextOrders,
+        selectedId,
+        includeOrderInfo,
+        orderSheet
+      });
+      setActiveBatchId(saved.id);
+      setActiveBatchName(saved.name);
+      setBatchSavedAt(saved.updatedAt);
+      setBatchDirty(false);
+      await refreshBatchArchives();
+      if (keyboard) {
+        setAwaitingNext(true);
+        setMessage(`${orderName} 已确认并自动保存批次，再按回车进入下一个`);
+      } else setMessage(`${orderName} 已确认排版，批次已自动保存`);
+    } catch (error) {
+      setBatchDirty(true);
+      setMessage(
+        error instanceof Error
+          ? `${orderName} 已确认，但批次自动保存失败：${error.message}`
+          : `${orderName} 已确认，但批次自动保存失败`
+      );
+    }
+  };
+  const toggleOrderReady = (order: Order, keyboard = false) => {
+    if (order.status === 'ready') {
+      updateOrder(order.id, (item) => ({...item, status: 'pending'}));
+      setAwaitingNext(false);
+      return;
+    }
+    if (
+      !matchingTemplate(templates, order.sku) &&
+      !window.confirm(`订单“${order.name}”的 SKU 没有命中模板，确认仍标记为已排版吗？`)
+    ) {
+      setMessage('已取消确认，请先检查或添加对应的 SKU 模板');
+      return;
+    }
+    const nextOrders = orders.map((item) =>
+      item.id === order.id ? {...item, status: 'ready' as const} : item
+    );
+    setOrders(nextOrders);
+    void autoSaveConfirmedBatch(nextOrders, order.name, keyboard);
+  };
+  const saveTemplateConfig = async (
+    value: TemplateRegions,
+    name: string,
+    nextHasCover: boolean,
+    nextPageMode: PageMode,
+    nextDuplex: boolean,
+    nextRotateCover: boolean,
+    nextRotateInner: boolean
+  ) => {
+    if (!selectedTemplateId) throw new Error('当前没有选中模板');
+    if (
+      selectedTemplate?.source === 'custom' &&
+      duplicateCustomTemplate(name, selectedTemplateId, selectedTemplate.organizationId)
+    )
+      throw new Error(`模板名称“${name}”已存在，请使用其他名称`);
+    if (nextDuplex && ![24, 25].includes(templatePageCount))
+      throw new Error(`双面印刷模板必须是24页或25页，当前PDF为${templatePageCount}页`);
+    if (!nextDuplex && ![12, 13].includes(templatePageCount))
+      throw new Error(`单面印刷模板必须是12页或13页，当前PDF为${templatePageCount}页`);
+    if (nextDuplex && nextPageMode === 'all')
+      throw new Error('双面印刷必须选择仅奇数页或仅偶数页插图');
+    if (selectedTemplate?.source === 'custom') {
+      const response = await fetch(`/api/templates/${selectedTemplateId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            name,
+            regions: value,
+            hasCover: nextHasCover,
+            pageCount: templatePageCount,
+            pageMode: nextPageMode,
+            duplex: nextDuplex,
+            rotateCover: nextRotateCover,
+            rotateInner: nextRotateInner
+          })
+        }),
+        data = (await response.json().catch(() => ({}))) as {
+          template?: ManagedTemplate;
+          error?: string;
+        };
+      if (!response.ok || !data.template) throw new Error(data.error ?? '模板配置保存失败');
+      setTemplates((current) =>
+        current.map((item) =>
+          item.id === selectedTemplateId
+            ? {
+                ...item,
+                ...managedTemplateRecord(data.template!),
+                file: item.file,
+                foregroundFile: item.foregroundFile
+              }
+            : item
+        )
+      );
+    } else
+      setTemplates((current) =>
+        current.map((item) =>
+          item.id === selectedTemplateId
+            ? {
+                ...item,
+                name,
+                regions: value,
+                hasCover: nextHasCover,
+                pageCount: templatePageCount,
+                pageMode: nextPageMode,
+                duplex: nextDuplex,
+                rotateCover: nextRotateCover,
+                rotateInner: nextRotateInner
+              }
+            : item
+        )
+      );
+    setRegions(value);
+    setHasCover(nextHasCover);
+    setPageMode(nextPageMode);
+    setDuplex(nextDuplex);
+    setRotateCover(nextRotateCover);
+    setRotateInner(nextRotateInner);
+    setSelectedPage(0);
+    setEditingTemplate(false);
+    setMessage(`模板“${name}”的区域和固定参数已保存`);
+    window.alert(`模板“${name}”配置保存成功`);
+  };
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const formTarget = ['INPUT', 'TEXTAREA', 'SELECT'].includes(
+        (event.target as HTMLElement)?.tagName
+      );
+      if (!selectedPhoto || (formTarget && event.key !== 'PageUp' && event.key !== 'PageDown'))
+        return;
+      const step = event.shiftKey ? 5 : 1;
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        updateTransform({x: selectedTransform.x - step});
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        updateTransform({x: selectedTransform.x + step});
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        updateTransform({y: selectedTransform.y - step});
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        updateTransform({y: selectedTransform.y + step});
+      } else if (event.key === 'PageDown') {
+        event.preventDefault();
+        const next = Math.min(11 + pageOffset, selectedPage + 1);
+        setSelectedPage(next);
+        if (lightboxPage !== null) setLightboxPage(next);
+      } else if (event.key === 'PageUp') {
+        event.preventDefault();
+        const next = Math.max(0, selectedPage - 1);
+        setSelectedPage(next);
+        if (lightboxPage !== null) setLightboxPage(next);
+      } else if (event.key === 'Enter' && selectedOrder) {
+        event.preventDefault();
+        if (awaitingNext) selectNextPending();
+        else toggleOrderReady(selectedOrder, true);
+      } else if (event.key === '+' || event.key === '=') {
+        event.preventDefault();
+        updateTransform({scale: Math.min(MAX_IMAGE_SCALE, selectedTransform.scale + 0.05)});
+      } else if (event.key === '-') {
+        event.preventDefault();
+        updateTransform({scale: Math.max(MIN_IMAGE_SCALE, selectedTransform.scale - 0.05)});
+      } else if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        const rotation = selectedTransform.rotation ?? 0,
+          delta = event.shiftKey ? -5 : 5;
+        updateTransform({rotation: ((((rotation + delta + 180) % 360) + 360) % 360) - 180});
+      } else if (event.key === '0') {
+        event.preventDefault();
+        resetTransform();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [
+    selectedPhoto,
+    selectedTransform,
+    selectedOrder,
+    orders,
+    pageOffset,
+    awaitingNext,
+    templates,
+    selectedPage,
+    lightboxPage
+  ]);
+
+  const buildPdf = async (order: Order) => {
+    const matchedTemplate = order.sku ? matchingTemplate(templates, order.sku) : selectedTemplate;
+    if (!matchedTemplate)
+      throw new Error(order.sku ? `订单 ${order.name} 缺少模板“${order.sku}”` : '请先选择模板');
+    const orderTemplate = await ensureTemplateFile(matchedTemplate),
+      pdf = await import('pdf-lib'),
+      output = await pdf.PDFDocument.load(await orderTemplate.file!.arrayBuffer()),
+      pageCount = output.getPageCount();
+    const orderForegroundFile =
+      orderTemplate.foregroundFile ??
+      (orderTemplate.source === 'custom' ? await loadForeground(orderTemplate.id) : undefined);
+    if (![12, 13, 24, 25].includes(pageCount))
+      throw new Error(`模板 ${orderTemplate.name} 页数不受支持：${pageCount}`);
+    const orderRegions: TemplateRegions = orderTemplate.regions ?? defaultRegions,
+      orderHasCover = orderTemplate.hasCover !== false,
+      orderPageMode = orderTemplate.pageMode ?? 'all',
+      orderDuplex = orderTemplate.duplex ?? pageCount >= 24,
+      orderRotateCover = orderTemplate.rotateCover === true,
+      orderRotateInner = orderTemplate.rotateInner === true;
+    if (orderDuplex && orderPageMode === 'all')
+      throw new Error(`双面模板 ${orderTemplate.name} 必须设置为奇数页或偶数页插图`);
+    const pageNumbers = templatePageNumbers(pageCount, orderHasCover, orderPageMode),
+      firstPageSize = output.getPage(0).getSize(),
+      drawMasked = async (
+        page: ReturnType<typeof output.getPage>,
+        photo: Photo,
+        region: TemplateRegions['cover'],
+        transform: Transform,
+        rotate180: boolean
+      ) => {
+        const {width: pageWidth, height: pageHeight} = page.getSize(),
+          toPdf = (point: Point) => ({
+            x: (pageWidth * point.x) / 100,
+            y: (pageHeight * (100 - point.y)) / 100
+          }),
+          bounds = regionBounds(region),
+          points = regionPoints(region),
+          box = {
+            x: (pageWidth * bounds.x) / 100,
+            y: (pageHeight * (100 - bounds.y - bounds.height)) / 100,
+            width: (pageWidth * bounds.width) / 100,
+            height: (pageHeight * bounds.height) / 100
+          },
+          first = toPdf(points[0]),
+          curves = points.map((point, index) => {
+            const next = points[(index + 1) % points.length],
+              out = toPdf(control(point, 'out')),
+              inside = toPdf(control(next, 'in')),
+              end = toPdf(next);
+            return pdf.appendBezierCurve(out.x, out.y, inside.x, inside.y, end.x, end.y);
+          }),
+          effectiveTransform = rotate180
+            ? {...transform, rotation: (transform.rotation ?? 0) + 180}
+            : transform,
+          dpiScale = 300 / 72,
+          image = await output.embedJpg(
+            await optimizedJpeg(
+              photo.file,
+              Math.round((pageWidth * dpiScale * bounds.width) / 100),
+              Math.round((pageHeight * dpiScale * bounds.height) / 100),
+              effectiveTransform
+            )
+          );
+        page.pushOperators(
+          pdf.pushGraphicsState(),
+          pdf.moveTo(first.x, first.y),
+          ...curves,
+          pdf.closePath(),
+          pdf.clip(),
+          pdf.endPath()
+        );
+        page.drawImage(image, box);
+        page.pushOperators(pdf.popGraphicsState());
+      };
+    let innerOffset = 0;
+    if (orderHasCover) {
+      await drawMasked(
+        output.getPage(pageNumbers[0] - 1),
+        order.cover,
+        orderRegions.cover,
+        order.transforms[order.cover.id] ?? initialTransform,
+        orderRotateCover
+      );
+      innerOffset = 1;
+    }
+    const innerPages = pageNumbers.slice(innerOffset);
+    for (let index = 0; index < innerPages.length; index++) {
+      const photo = order.arrangement[index % order.arrangement.length],
+        physicalIndex = innerPages[index] - 1;
+      await drawMasked(
+        output.getPage(physicalIndex),
+        photo,
+        orderRegions.inner,
+        order.transforms[photo.id] ?? initialTransform,
+        orderRotateInner
+      );
+    }
+    if (orderForegroundFile) {
+      const foregroundBytes = await orderForegroundFile.arrayBuffer(),
+        foregroundDocument = await pdf.PDFDocument.load(foregroundBytes);
+      if (foregroundDocument.getPageCount() !== pageCount)
+        throw new Error('前景保护层页数与背景模板不一致');
+      const embeddedPages = await output.embedPdf(
+        foregroundBytes,
+        Array.from({length: pageCount}, (_, index) => index)
+      );
+      for (let index = 0; index < pageCount; index++) {
+        const page = output.getPage(index),
+          {width, height} = page.getSize();
+        page.drawPage(embeddedPages[index], {x: 0, y: 0, width, height});
+      }
+    }
+    if (includeOrderInfo) {
+      const {width: pageWidth, height: pageHeight} = firstPageSize,
+        dpiScale = 300 / 72,
+        canvas = orderInfoCanvas(
+          order.name,
+          order.warehouse,
+          Math.round(pageWidth * dpiScale),
+          Math.round(pageHeight * dpiScale)
+        ),
+        blob = await new Promise<Blob>((resolve, reject) =>
+          canvas.toBlob(
+            (value) => (value ? resolve(value) : reject(new Error('订单信息页生成失败'))),
+            'image/png'
+          )
+        ),
+        image = await output.embedPng(await blob.arrayBuffer()),
+        page = output.insertPage(0, [pageWidth, pageHeight]);
+      page.drawImage(image, {x: 0, y: 0, width: pageWidth, height: pageHeight});
+      if (orderDuplex) output.insertPage(1, [pageWidth, pageHeight]);
+    }
+    const name = `${safeName(orderTemplate.name.replace(/\.pdf$/i, ''))}-${safeName(order.name)}`;
+    output.setTitle(name);
+    output.setCreator('JHT ISP SYSTEM');
+    return {name, bytes: await output.save({useObjectStreams: true, addDefaultPage: false})};
+  };
+  const download = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob),
+      anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const exportConfig = async (ids: Set<string>) => {
+    const targets = templates.filter((item) => ids.has(item.id));
+    if (!targets.length) {
+      setMessage('请至少选择一个需要导出的模板');
+      return;
+    }
+    setBusy(true);
+    try {
+      const JSZip = (await import('jszip')).default,
+        zip = new JSZip(),
+        items = [];
+      for (let index = 0; index < targets.length; index++) {
+        const item = await ensureTemplateFile(targets[index]),
+          path = `templates/${String(index + 1).padStart(3, '0')}.pdf`;
+        zip.file(path, await item.file!.arrayBuffer());
+        const foreground =
+            item.foregroundFile ??
+            (item.source === 'custom' ? await loadForeground(item.id) : undefined),
+          foregroundPath = foreground
+            ? `templates/${String(index + 1).padStart(3, '0')}-foreground.pdf`
+            : undefined;
+        if (foreground && foregroundPath) zip.file(foregroundPath, await foreground.arrayBuffer());
+        items.push({
+          id: item.id,
+          name: item.name,
+          path,
+          foregroundPath,
+          regions: item.regions ?? defaultRegions,
+          hasCover: item.hasCover !== false,
+          pageCount: item.pageCount,
+          pageMode: item.pageMode ?? 'all',
+          duplex: item.duplex ?? false,
+          rotateCover: item.rotateCover ?? false,
+          rotateInner: item.rotateInner ?? false
+        });
+      }
+      zip.file(
+        'jht-config.json',
+        JSON.stringify(
+          {
+            format: 'JHT-ISP-CONFIG',
+            version: 1,
+            createdAt: new Date().toISOString(),
+            templates: items
+          },
+          null,
+          2
+        )
+      );
+      download(
+        await zip.generateAsync({
+          type: 'blob',
+          compression: 'DEFLATE',
+          compressionOptions: {level: 6}
+        }),
+        `JHT-配置-${new Date().toISOString().slice(0, 10)}.zip`
+      );
+      setMessage(`已导出 ${targets.length} 个模板及固定参数配置`);
+      setShowTemplateExport(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '配置导出失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const importConfig = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || busy) return;
+    setBusy(true);
+    setTemplateBusyLabel('正在导入模板配置…');
+    try {
+      const JSZip = (await import('jszip')).default,
+        zip = await JSZip.loadAsync(file),
+        manifestFile = zip.file('jht-config.json');
+      if (!manifestFile) throw new Error('不是有效的JHT配置包');
+      const manifest = JSON.parse(await manifestFile.async('text')) as TemplateManifest;
+      if (manifest.format !== 'JHT-ISP-CONFIG' || !Array.isArray(manifest.templates))
+        throw new Error('配置包格式不正确');
+      const restored: TemplateRecord[] = [];
+      for (const item of manifest.templates) {
+        const pdfEntry = zip.file(item.path);
+        if (!pdfEntry) throw new Error(`配置包缺少模板：${item.name}`);
+        const foregroundEntry = item.foregroundPath ? zip.file(item.foregroundPath) : null;
+        if (item.foregroundPath && !foregroundEntry) throw new Error('配置包缺少前景保护层');
+        const uploaded = await uploadManagedTemplate(
+          templateTargetOrganizationId,
+          new File([await pdfEntry.async('blob')], item.id, {type: 'application/pdf'}),
+          item.name,
+          {
+            regions: item.regions ?? defaultRegions,
+            hasCover: item.hasCover !== false,
+            pageCount: item.pageCount,
+            pageMode: item.pageMode ?? 'all',
+            duplex: item.duplex ?? [24, 25].includes(item.pageCount ?? 0),
+            rotateCover: item.rotateCover ?? item.rotateImported ?? false,
+            rotateInner: item.rotateInner ?? item.rotateImported ?? false
+          },
+          foregroundEntry
+            ? new File([await foregroundEntry.async('blob')], item.id + '-foreground.pdf', {
+                type: 'application/pdf'
+              })
+            : undefined
+        );
+        restored.push(uploaded);
+      }
+      const custom = await loadTemplates(),
+        next = [...templates.filter((item) => item.source === 'default'), ...custom];
+      setTemplates(next);
+      setSelectedTemplateId(restored[0]?.id ?? next[0]?.id ?? '');
+      setMessage(`已恢复 ${restored.length} 个自定义模板及固定参数配置`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '配置导入失败');
+    } finally {
+      setBusy(false);
+      setTemplateBusyLabel('');
+    }
+  };
+  const exportCurrent = async () => {
+    if (!selectedOrder) return;
+    setBusy(true);
+    try {
+      setProgress(`正在导出 ${selectedOrder.name}`);
+      const result = await buildPdf(selectedOrder),
+        blob = new Blob([result.bytes as BlobPart], {type: 'application/pdf'});
+      for (let copy = 1; copy <= selectedOrder.quantity; copy++)
+        download(blob, `${result.name}${selectedOrder.quantity > 1 ? `-${copy}` : ''}.pdf`);
+      setMessage(`${selectedOrder.name} 已导出 ${selectedOrder.quantity} 份`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '导出失败');
+    } finally {
+      setBusy(false);
+      setProgress('');
+    }
+  };
+  const exportAll = async () => {
+    const targets = orders.filter((order) => order.status === 'ready');
+    if (!targets.length) return;
+    setBusy(true);
+    try {
+      const JSZip = (await import('jszip')).default,
+        zip = new JSZip(),
+        total = targets.reduce((sum, order) => sum + order.quantity, 0);
+      let completed = 0;
+      for (const order of targets) {
+        setProgress(`正在生成 ${completed + 1}/${total}：${order.name}`);
+        const result = await buildPdf(order);
+        for (let copy = 1; copy <= order.quantity; copy++) {
+          zip.file(`${result.name}${order.quantity > 1 ? `-${copy}` : ''}.pdf`, result.bytes);
+          completed++;
+        }
+      }
+      setProgress('正在打包…');
+      download(
+        await zip.generateAsync({
+          type: 'blob',
+          compression: 'DEFLATE',
+          compressionOptions: {level: 6}
+        }),
+        `已排版-${targets.length}个订单-${total}份.zip`
+      );
+      setMessage(`已打包导出 ${targets.length} 个订单，共 ${total} 份`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批量导出失败');
+    } finally {
+      setBusy(false);
+      setProgress('');
+    }
+  };
+  const exportPdfsToFolder = async () => {
+    const targets = orders.filter((order) => order.status === 'ready');
+    if (!targets.length) return;
+    type Writable = {write: (data: Blob) => Promise<void>; close: () => Promise<void>};
+    type FileHandle = {createWritable: () => Promise<Writable>};
+    type DirectoryHandle = {
+      getFileHandle: (name: string, options: {create: boolean}) => Promise<FileHandle>;
+    };
+    const picker = (
+      window as typeof window & {showDirectoryPicker?: () => Promise<DirectoryHandle>}
+    ).showDirectoryPicker;
+    if (!picker) {
+      setMessage('当前浏览器不支持选择文件夹，请使用最新版Chrome或Edge');
+      return;
+    }
+    try {
+      const directory = await picker.call(window),
+        total = targets.reduce((sum, order) => sum + order.quantity, 0);
+      setBusy(true);
+      let completed = 0;
+      for (const order of targets) {
+        const result = await buildPdf(order);
+        for (let copy = 1; copy <= order.quantity; copy++) {
+          setProgress(`正在保存 ${completed + 1}/${total}：${order.name}`);
+          const handle = await directory.getFileHandle(
+              `${result.name}${order.quantity > 1 ? `-${copy}` : ''}.pdf`,
+              {create: true}
+            ),
+            writable = await handle.createWritable();
+          await writable.write(new Blob([result.bytes as BlobPart], {type: 'application/pdf'}));
+          await writable.close();
+          completed++;
+        }
+      }
+      setMessage(`已将 ${targets.length} 个订单、共 ${total} 份PDF保存到所选文件夹`);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError')
+        setMessage('已取消选择保存文件夹');
+      else setMessage(error instanceof Error ? error.message : 'PDF文件夹导出失败');
+    } finally {
+      setBusy(false);
+      setProgress('');
+    }
+  };
+
+  const sidebar = (
+    <aside className={`app-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+      <button
+        className="sidebar-collapse"
+        onClick={() => setSidebarCollapsed((value) => !value)}
+        title={sidebarCollapsed ? '展开菜单' : '收起菜单'}
+      >
+        {sidebarCollapsed ? '»' : '«'}
+      </button>
+      <div className="sidebar-brand">
+        <span>JHT</span>
+        <div>
+          <b>图片处理</b>
+          <small>ISP SYSTEM</small>
+        </div>
+      </div>
+      <nav>
+        <p>工作台</p>
+        {user.permissions.includes('customization') && (
+          <button
+            className={!templateManagement && !accountManagement && !changelogOpen ? 'active' : ''}
+            onClick={() => {
+              setTemplateManagement(false);
+              setAccountManagement(false);
+              setChangelogOpen(false);
+            }}
+          >
+            <i>01</i>
+            <span>定制处理</span>
+            <em>›</em>
+          </button>
+        )}
+        {user.permissions.includes('templates') && (
+          <button
+            className={templateManagement && !changelogOpen ? 'active' : ''}
+            onClick={() => {
+              setTemplateManagement(true);
+              setAccountManagement(false);
+              setChangelogOpen(false);
+            }}
+          >
+            <i>02</i>
+            <span>模板管理</span>
+            <em>›</em>
+          </button>
+        )}
+        {user.permissions.includes('accounts') && (
+          <button
+            className={accountManagement && !changelogOpen ? 'active' : ''}
+            onClick={() => {
+              setTemplateManagement(false);
+              setAccountManagement(true);
+              setChangelogOpen(false);
+            }}
+          >
+            <i>03</i>
+            <span>账号管理</span>
+            <em>›</em>
+          </button>
+        )}
+        <button
+          className={changelogOpen ? 'active' : ''}
+          onClick={() => {
+            setTemplateManagement(false);
+            setAccountManagement(false);
+            setChangelogOpen(true);
+          }}
+        >
+          <i>04</i>
+          <span>更新日志</span>
+          <em>›</em>
+        </button>
+      </nav>
+      <div className="sidebar-account">
+        <div className="sidebar-user">
+          <b>{user.username}</b>
+          <small>
+            {user.organizations.length > 1
+              ? `${user.organizations.length} 个组织`
+              : (user.organizations[0]?.name ?? '默认组织')}
+          </small>
+        </div>
+        <button onClick={logout}>退出登录</button>
+      </div>
+    </aside>
+  );
+  if (accountManagement)
+    return (
+      <>
+        <AccountManagement />
+        {sidebar}
+      </>
+    );
+  if (changelogOpen)
+    return (
+      <>
+        <UpdateLog />
+        {sidebar}
+      </>
+    );
+
+  if (templateManagement)
+    return (
+      <main className="template-management-page with-sidebar">
+        {sidebar}
+        <header className="system-bar page-topbar">
+          <div className="page-heading">
+            <b>模板管理</b>
+            <span>双击模板可直接编辑；保存后参数才生效</span>
+          </div>
+        </header>
+        <section className="template-management-toolbar">
+          {user.organizations.length > 1 && (
+            <label className="template-target-organization">
+              保存到组织
+              <select
+                value={templateTargetOrganizationId}
+                onChange={(event) => setTemplateTargetOrganizationId(event.target.value)}
+                disabled={busy}
+              >
+                {user.organizations.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className={busy ? 'disabled' : ''}>
+            {templateBusyLabel || '导入 PDF 模板'}
+            <input
+              type="file"
+              accept="application/pdf"
+              multiple
+              disabled={busy}
+              onChange={chooseTemplates}
+            />
+          </label>
+          <label className={busy ? 'disabled' : ''}>
+            {templateBusyLabel || '导入模板配置'}
+            <input
+              type="file"
+              accept=".zip,application/zip"
+              disabled={busy}
+              onChange={importConfig}
+            />
+          </label>
+          <button
+            disabled={busy || !templates.length}
+            onClick={() => {
+              setExportTemplateIds(new Set(templates.map((item) => item.id)));
+              setShowTemplateExport(true);
+            }}
+          >
+            {templateBusyLabel || '导出模板配置'}
+          </button>
+          <button
+            disabled={busy || !allTemplatePages.length}
+            onClick={() => setEditingTemplate(true)}
+          >
+            编辑定制区域与参数
+          </button>
+          <button disabled={busy || !selectedTemplate} onClick={duplicateTemplate}>
+            {templateBusyLabel || '复制当前模板'}
+          </button>
+          <button className="danger" disabled={busy || !selectedTemplate} onClick={deleteTemplate}>
+            {templateBusyLabel || '删除当前模板'}
+          </button>
+          <button
+            className="danger ghost"
+            disabled={busy || !customTemplateCount}
+            onClick={clearCustomTemplates}
+          >
+            {templateBusyLabel || '清空自定义模板'}
+          </button>
+          {templateBusyLabel && (
+            <span className="template-toolbar-loading">{templateBusyLabel}</span>
+          )}
+        </section>
+        <section className="template-management-content">
+          <aside>
+            <h2>
+              模板列表{' '}
+              <span>
+                {visibleTemplates.length}/{templates.length}
+              </span>
+            </h2>
+            <input
+              className="template-search"
+              type="search"
+              placeholder="搜索模板名称"
+              value={templateSearch}
+              onChange={(event) => setTemplateSearch(event.target.value)}
+            />
+            {visibleTemplates.map((item) => {
+              const itemMode = item.pageMode ?? 'all',
+                coverRotated = item.rotateCover === true,
+                innerRotated = item.rotateInner === true,
+                itemPages = item.pageCount ?? '待识别',
+                itemHasCover = item.hasCover !== false,
+                itemDuplex = item.duplex === true,
+                hasForeground = Boolean(item.foregroundFile || item.foregroundUrl);
+              return (
+                <button
+                  key={item.id}
+                  className={item.id === selectedTemplateId ? 'active' : ''}
+                  onClick={() => setSelectedTemplateId(item.id)}
+                  onDoubleClick={() => {
+                    setSelectedTemplateId(item.id);
+                    setEditingTemplate(true);
+                  }}
+                >
+                  <b>{item.name.replace(/\.pdf$/i, '')}</b>
+                  <small>
+                    {item.source === 'default'
+                      ? '内置模板'
+                      : (user.organizations.find(
+                          (organization) => organization.id === item.organizationId
+                        )?.name ?? '自定义模板')}
+                  </small>
+                  <span className="template-list-params">
+                    <em>{itemPages}页</em>
+                    <em>{itemHasCover ? '有封面' : '无封面'}</em>
+                    <em>
+                      {itemMode === 'all' ? '全部页' : itemMode === 'odd' ? '奇数页' : '偶数页'}
+                    </em>
+                    <em>{itemDuplex ? '双面' : '单面'}</em>
+                    {itemHasCover && <em>封面{coverRotated ? '旋转180°' : '保持方向'}</em>}
+                    <em>内页{innerRotated ? '旋转180°' : '保持方向'}</em>
+                    {hasForeground && <em className="foreground-badge">前景保护</em>}
+                  </span>
+                </button>
+              );
+            })}
+            {!templates.length ? (
+              <p>当前没有模板。你可以导入 PDF；部署内置模板包更新后，也会在这里自动出现。</p>
+            ) : (
+              !visibleTemplates.length && <p>没有匹配“{templateSearch}”的模板。</p>
+            )}
+          </aside>
+          <div className="template-management-detail">
+            {selectedTemplate ? (
+              <>
+                <div className="template-detail-title">
+                  <div>
+                    <small>
+                      {selectedTemplate.source === 'default' ? '内置模板' : '自定义模板'}
+                    </small>
+                    <h2>{selectedTemplate.name.replace(/\.pdf$/i, '')}</h2>
+                  </div>
+                  <span>
+                    {templatePageCount} 页 · {hasCover ? '含封面' : '无封面'} ·{' '}
+                    {pageMode === 'all'
+                      ? '全部页插图'
+                      : pageMode === 'odd'
+                        ? '奇数页插图'
+                        : '偶数页插图'}{' '}
+                    · {duplex ? '双面' : '单面'}
+                    {rotateImported ? ' · 图片旋转180°' : ''}
+                  </span>
+                </div>
+                <div className={`template-preview-pair ${hasCover ? 'two' : ''}`}>
+                  {hasCover && (
+                    <TemplateLayerPreview
+                      backgroundUrl={allTemplatePages[0]}
+                      foregroundUrl={foregroundPages[0]}
+                      region={regions.cover}
+                      label="封面"
+                    />
+                  )}
+                  <TemplateLayerPreview
+                    backgroundUrl={templatePages[hasCover ? 1 : 0]}
+                    foregroundUrl={foregroundPages[hasCover ? 1 : 0]}
+                    region={regions.inner}
+                    label="内页示例"
+                  />
+                </div>
+                <p>{templateBusyLabel || message}</p>
+              </>
+            ) : (
+              <div className="template-empty-detail">
+                <b>请选择或导入模板</b>
+                <span>模板固定参数、区域编辑、复制和删除都集中在这个页面。</span>
+              </div>
+            )}
+          </div>
+        </section>
+        {editingTemplate && selectedTemplate && (
+          <TemplateEditor
+            pages={allTemplatePages}
+            value={regions}
+            templateName={selectedTemplate.name.replace(/\.pdf$/i, '')}
+            hasCover={hasCover}
+            pageCount={templatePageCount}
+            pageMode={pageMode}
+            duplex={duplex}
+            rotateImported={rotateImported}
+            rotateCover={rotateCover}
+            rotateInner={rotateInner}
+            onClose={() => setEditingTemplate(false)}
+            onSave={saveTemplateConfig}
+          />
+        )}
+        {showTemplateExport && (
+          <TemplateExportDialog
+            templates={templates}
+            selected={exportTemplateIds}
+            onChange={setExportTemplateIds}
+            onClose={() => setShowTemplateExport(false)}
+            onConfirm={() => exportConfig(exportTemplateIds)}
+            busy={busy}
+          />
+        )}
+      </main>
+    );
+
+  const pages = selectedOrder
+    ? [
+        ...(hasCover ? [{label: '封面', photo: selectedOrder.cover}] : []),
+        ...months.map((label, index) => ({label, photo: selectedOrder.arrangement[index]}))
+      ]
+    : [];
+  return (
+    <main className="app-shell with-sidebar">
+      {sidebar}
+      <header className="system-bar page-topbar">
+        <div className="page-heading">
+          <b>定制处理</b>
+          <span>批量订单图片排版与导出</span>
+        </div>
+        <div className="header-actions">
+          <label className="header-button sheet-import">
+            导入订单表格
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={importOrderSheet}
+            />
+          </label>
+          <label className="header-button primary">
+            导入订单文件夹
+            <input
+              ref={folderInput}
+              type="file"
+              webkitdirectory=""
+              directory=""
+              multiple
+              onChange={importFolder}
+            />
+          </label>
+        </div>
+      </header>
+      <div className="summary-bar">
+        <div className="template-picker">
+          <span>模板</span>
+          <select
+            value={selectedTemplateId}
+            onChange={(event) => setSelectedTemplateId(event.target.value)}
+          >
+            <option value="">请选择模板</option>
+            {templates.map((item) => (
+              <option value={item.id} key={item.id}>
+                {item.source === 'default' ? '[内置] ' : '[自定义] '}
+                {item.name.replace(/\.pdf$/i, '')}
+              </option>
+            ))}
+          </select>
+          <button
+            className={`order-info-toggle ${includeOrderInfo ? 'active' : ''}`}
+            onClick={() => setIncludeOrderInfo((value) => !value)}
+          >
+            {includeOrderInfo ? '✓ 订单信息页' : '订单信息页'}
+          </button>
+        </div>
+        <div className="summary-stats">
+          <span>
+            订单 <b>{orders.length}</b>
+          </span>
+          <span className="shipment-stat">
+            发货数 <b>{shipmentCount}</b>
+          </span>
+          <span>
+            待排版 <b>{pendingCount}</b>
+          </span>
+          <span className="ready-text">
+            已排版 <b>{readyCount}</b>
+          </span>
+          <button
+            type="button"
+            className="warning-stat missing-summary"
+            onClick={() => setShowMissingTemplates(true)}
+          >
+            缺少模板 <b>{missingTemplateCount}</b>
+          </button>
+          <span className="warning-stat">
+            未匹配订单 <b>{unmatchedCount}</b>
+          </span>
+        </div>
+        <div className="current-order">
+          当前订单 <b>{selectedOrder?.name ?? '—'}</b>
+          {selectedOrder && (
+            <div className="summary-order-actions">
+              <button
+                onClick={() =>
+                  updateOrder(selectedOrder.id, (order) => ({
+                    ...order,
+                    arrangement: arrangeInSequence(order.photos),
+                    status: 'pending'
+                  }))
+                }
+              >
+                重新补排
+              </button>
+              <button
+                className={selectedOrder.status === 'ready' ? 'confirmed' : ''}
+                onClick={() => toggleOrderReady(selectedOrder)}
+              >
+                {selectedOrder.status === 'ready' ? '✓ 已排版' : '确认已排版'}
+              </button>
+              <button
+                className={`next-order ${awaitingNext ? 'awaiting' : ''}`}
+                onClick={selectNextPending}
+              >
+                {awaitingNext ? '✓ 已经确认，进入下一个' : '下一个 →'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      {showBatchManager && (
+        <div className="batch-manager-backdrop" onClick={() => setShowBatchManager(false)}>
+          <section className="batch-manager-dialog" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <b>批次管理</b>
+              <button onClick={() => setShowBatchManager(false)}>×</button>
+            </header>
+            <div className="batch-manager-actions">
+              <button
+                onClick={() => setCheckedBatchIds(new Set(batchArchives.map((batch) => batch.id)))}
+              >
+                全选
+              </button>
+              <button onClick={() => setCheckedBatchIds(new Set())}>取消全选</button>
+            </div>
+            <div className="batch-manager-list">
+              {batchArchives.map((batch) => (
+                <label key={batch.id}>
+                  <input
+                    type="checkbox"
+                    checked={checkedBatchIds.has(batch.id)}
+                    onChange={(event) => {
+                      const next = new Set(checkedBatchIds);
+                      if (event.target.checked) next.add(batch.id);
+                      else next.delete(batch.id);
+                      setCheckedBatchIds(next);
+                    }}
+                  />
+                  <span>
+                    <b>{batch.name}</b>
+                    <small>
+                      {batch.orderCount} 个订单 ·{' '}
+                      {new Date(batch.updatedAt).toLocaleString('zh-CN')}
+                    </small>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <footer>
+              <span>已选择 {checkedBatchIds.size} 个</span>
+              <button disabled={!checkedBatchIds.size} onClick={removeCheckedBatches}>
+                删除所选批次
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {showMissingTemplates && (
+        <MissingTemplateDialog
+          names={missingTemplateNames}
+          onClose={() => setShowMissingTemplates(false)}
+          onCopied={(count) => {
+            setMessage(`已复制 ${count} 个缺少模板名称`);
+            setShowMissingTemplates(false);
+          }}
+        />
+      )}
+      <div className="batch-workspace">
+        <aside className="orders-panel">
+          <div className="orders-head">
+            <h2>订单列表</h2>
+            <span>
+              {visibleOrders.length}/{orders.length}
+            </span>
+          </div>
+          <input
+            className="search"
+            placeholder="搜索订单名称"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <div className="filters">
+            <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>
+              全部
+            </button>
+            <button
+              className={filter === 'pending' ? 'active' : ''}
+              onClick={() => setFilter('pending')}
+            >
+              未排
+            </button>
+            <button
+              className={filter === 'ready' ? 'active' : ''}
+              onClick={() => setFilter('ready')}
+            >
+              已排
+            </button>
+            <button
+              className={filter === 'unmatched' ? 'active' : ''}
+              onClick={() => setFilter('unmatched')}
+            >
+              未匹配
+            </button>
+            <button
+              className={filter === 'missing-template' ? 'active' : ''}
+              onClick={() => setFilter('missing-template')}
+            >
+              缺模板
+            </button>
+          </div>
+          <select
+            className="category-filter"
+            value={skuFilter}
+            onChange={(event) => setSkuFilter(event.target.value)}
+          >
+            <option value="all">全部 SKU 模板</option>
+            {skuOptions.map((sku) => (
+              <option key={sku} value={sku}>
+                {sku}
+              </option>
+            ))}
+          </select>
+          <div className="batch-archive-controls">
+            <div className="batch-archive-head">
+              <span>批次存档</span>
+              <b>{batchDirty ? '未保存' : activeBatchId ? '已保存' : '未存档'}</b>
+            </div>
+            <p className="active-batch-name">{activeBatchName}</p>
+            <select value={activeBatchId} onChange={(event) => openBatch(event.target.value)}>
+              <option value="">选择已有存档</option>
+              {batchArchives.map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.name} · {batch.orderCount}单
+                </option>
+              ))}
+            </select>
+            <div>
+              <button type="button" onClick={newBatch}>
+                新建批次
+              </button>
+              <button
+                type="button"
+                className="save-batch"
+                disabled={busy || !orders.length}
+                onClick={saveCurrentBatch}
+              >
+                保存批次
+              </button>
+              <button type="button" disabled={!activeBatchId} onClick={renameBatch}>
+                重命名
+              </button>
+              <button
+                type="button"
+                className="delete-batch"
+                onClick={() => {
+                  setCheckedBatchIds(new Set());
+                  setShowBatchManager(true);
+                }}
+              >
+                批次管理
+              </button>
+            </div>
+            <small>
+              {batchSavedAt
+                ? '上次保存：' + new Date(batchSavedAt).toLocaleString('zh-CN')
+                : '尚未保存为批次'}
+            </small>
+          </div>
+          <div className="order-list">
+            {visibleOrders.map((order, index) => {
+              const matchedTemplate = matchingTemplate(templates, order.sku);
+              return (
+                <button
+                  className={`order-row ${selectedOrder?.id === order.id ? 'selected' : ''}`}
+                  key={order.id}
+                  onClick={() => {
+                    setSelectedId(order.id);
+                    setSelectedPage(0);
+                  }}
+                >
+                  <span className={`status-mark ${order.status}`}>
+                    {order.status === 'ready' ? '✓' : String(index + 1).padStart(2, '0')}
+                  </span>
+                  <span>
+                    <b>{order.name}</b>
+                    <small className="shipment-line">
+                      发货{' '}
+                      <strong
+                        className={`shipment-quantity ${!order.sheetMatched ? 'unmatched' : order.quantity > 1 ? 'multi-shipment' : ''}`}
+                      >
+                        {order.sheetMatched ? order.quantity : '—'}
+                      </strong>
+                      <span>{order.photos.length + (hasCover ? 1 : 0)} 张图片</span>
+                    </small>
+                    <small
+                      className={`template-match ${order.sheetMatched && !matchedTemplate ? 'missing' : ''}`}
+                    >
+                      {matchedTemplate
+                        ? `SKU：${order.sku} · 模板：${matchedTemplate.name.replace(/\.pdf$/i, '')}（${matchedTemplate.source === 'custom' ? '自定义' : '内置'}）`
+                        : order.sheetMatched
+                          ? `模板：未匹配 · SKU：${order.sku || 'SKU未提供'}`
+                          : '表格：未匹配 · 模板：待匹配'}
+                    </small>
+                  </span>
+                  <em>{order.status === 'ready' ? '已排版' : '待排版'}</em>
+                </button>
+              );
+            })}
+            {!visibleOrders.length && <p className="empty-list">没有匹配订单</p>}
+          </div>
+          {selectedOrder && (
+            <div className="order-delete-zone">
+              <span>危险操作</span>
+              <button type="button" onClick={() => deleteOrder(selectedOrder)}>
+                删除当前订单
+              </button>
+            </div>
+          )}
+        </aside>
+        <section className="pages-panel">
+          <div className="pages-head">
+            <p>
+              {selectedOrder
+                ? `输出文件：${templateBase}-${safeName(selectedOrder.name)}.pdf`
+                : '每个一级子文件夹将被识别为一个订单'}
+            </p>
+          </div>
+          {selectedOrder ? (
+            <div className="page-grid">
+              {pages.map((item, index) => {
+                const transform = selectedOrder.transforms[item.photo.id] ?? initialTransform,
+                  region = hasCover && index === 0 ? regions.cover : regions.inner,
+                  isCover = hasCover && index === 0;
+                return (
+                  <article
+                    className={`page-card page-position-${index} ${selectedPage === index ? 'selected' : ''} ${draggingPage === index ? 'dragging' : ''}`}
+                    key={`${item.label}-${index}`}
+                    onClick={() => setSelectedPage(index)}
+                    onDoubleClick={() => {
+                      setSelectedPage(index);
+                      setLightboxPage(index);
+                    }}
+                  >
+                    <div
+                      className="page-interaction"
+                      title="拖动图片；滚轮缩放；Option/Alt+滚轮旋转；右键回到中心"
+                      onContextMenu={(event) => centerImage(event, index, item.photo)}
+                      onPointerDown={(event) => beginImageDrag(event, index, item.photo)}
+                      onPointerMove={moveImageDrag}
+                      onPointerUp={endImageDrag}
+                      onPointerCancel={endImageDrag}
+                      onWheel={(event) => adjustImageWithWheel(event, index, item.photo)}
+                    >
+                      <PageVisual
+                        templateUrl={templatePages[index]}
+                        photo={item.photo}
+                        transform={transform}
+                        region={region}
+                        label={item.label}
+                        rotateImported={isCover ? rotateCover : rotateInner}
+                        foregroundPages={foregroundPages}
+                        showBounds={selectedPage === index}
+                        snapGuides={snapGuides?.page === index ? snapGuides : undefined}
+                        onResizeStart={(event) => beginImageResize(event, index, item.photo)}
+                      />
+                    </div>
+                    {selectedPage === index && <span className="editing-badge">正在调整</span>}
+                    <span className="page-index">{String(index + 1).padStart(2, '0')}</span>
+                    <div className="page-caption">
+                      <span>
+                        <b>{item.label}</b>
+                        <small>{item.photo.file.name}</small>
+                      </span>
+                      {index >= pageOffset && (
+                        <div className="move-buttons">
+                          <button
+                            disabled={index === pageOffset}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              movePage(index - pageOffset, -1);
+                            }}
+                          >
+                            ←
+                          </button>
+                          <button
+                            disabled={index === 11 + pageOffset}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              movePage(index - pageOffset, 1);
+                            }}
+                          >
+                            →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {index >= pageOffset && (
+                      <select
+                        className="page-photo-picker"
+                        aria-label={`指定${item.label}图片`}
+                        value={item.photo.id}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) =>
+                          choosePagePhoto(index - pageOffset, event.target.value)
+                        }
+                      >
+                        {selectedOrder.photos.map((photo, photoIndex) => (
+                          <option value={photo.id} key={photo.id}>
+                            {photoIndex + 1}. {photo.file.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </article>
+                );
+              })}
+              {includeOrderInfo && (
+                <article className="page-card order-info-card">
+                  <OrderInfoVisual
+                    orderNumber={selectedOrder.name}
+                    warehouse={selectedOrder.warehouse}
+                  />
+                  <span className="page-index">附</span>
+                  <div className="page-caption">
+                    <span>
+                      <b>订单信息页</b>
+                      <small>{selectedOrder.warehouse || '未提供收货仓库'} · 条码</small>
+                    </span>
+                  </div>
+                </article>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="empty-stage"
+              onClick={() => folderInput.current?.click()}
+            >
+              <b>从文件夹开始</b>
+              <p>点击选择包含多个订单子文件夹的总文件夹。</p>
+              <small>根目录如有 Excel 订单表格将自动读取</small>
+            </button>
+          )}
+        </section>
+        <aside className={`adjust-panel ${selectedPhoto ? 'active' : ''}`}>
+          <div className="adjust-title">
+            <span>03</span>
+            <div>
+              <h2>图片调整</h2>
+              <p>{selectedPhoto?.file.name ?? '先选择一个页面'}</p>
+            </div>
+          </div>
+          <div className="selected-preview actual-preview">
+            {selectedPhoto ? (
+              <div
+                className={`page-interaction side-interaction ${draggingPage === selectedPage ? 'dragging' : ''}`}
+                title="拖动图片；滚轮缩放；Option/Alt+滚轮旋转；右键回到中心"
+                onContextMenu={(event) => centerImage(event, selectedPage, selectedPhoto)}
+                onPointerDown={(event) => beginImageDrag(event, selectedPage, selectedPhoto)}
+                onPointerMove={moveImageDrag}
+                onPointerUp={endImageDrag}
+                onPointerCancel={endImageDrag}
+                onWheel={(event) => adjustImageWithWheel(event, selectedPage, selectedPhoto)}
+              >
+                <PageVisual
+                  templateUrl={templatePages[selectedPage]}
+                  photo={selectedPhoto}
+                  transform={selectedTransform}
+                  region={selectedRegion}
+                  label={
+                    hasCover && selectedPage === 0 ? '封面' : months[selectedPage - pageOffset]
+                  }
+                  rotateImported={hasCover && selectedPage === 0 ? rotateCover : rotateInner}
+                  foregroundPages={foregroundPages}
+                  showBounds
+                  snapGuides={snapGuides?.page === selectedPage ? snapGuides : undefined}
+                  onResizeStart={(event) => beginImageResize(event, selectedPage, selectedPhoto)}
+                />
+              </div>
+            ) : (
+              <span>无图片</span>
+            )}
+            <em>{hasCover && selectedPage === 0 ? '封面' : months[selectedPage - pageOffset]}</em>
+          </div>
+          {selectedOrder?.preview && (
+            <div
+              className="order-reference"
+              onDoubleClick={() => setPreviewLightbox(true)}
+              title="双击放大"
+            >
+              <b>合成预览图</b>
+              <img src={selectedOrder.preview.url} alt="合成预览图" />
+              <small>双击放大观察，不参与导出</small>
+            </div>
+          )}
+          <label>
+            <span>
+              缩放{' '}
+              <input
+                className="value-input"
+                type="number"
+                min="0.5"
+                max="5"
+                step="0.01"
+                value={selectedTransform.scale}
+                onChange={(event) => updateTransformNumber('scale', event.target.value, 0.5, 5)}
+              />
+            </span>
+            <input
+              type="range"
+              min="0.5"
+              max="5"
+              step=".01"
+              value={selectedTransform.scale}
+              disabled={!selectedPhoto}
+              onChange={(event) => updateTransform({scale: Number(event.target.value)})}
+            />
+          </label>
+          <label>
+            <span>
+              左右{' '}
+              <input
+                className="value-input"
+                type="number"
+                min="-80"
+                max="80"
+                step="1"
+                value={selectedTransform.x}
+                onChange={(event) =>
+                  updateTransformNumber('x', event.target.value, MIN_IMAGE_OFFSET, MAX_IMAGE_OFFSET)
+                }
+              />
+            </span>
+            <input
+              type="range"
+              min="-80"
+              max="80"
+              value={selectedTransform.x}
+              disabled={!selectedPhoto}
+              onChange={(event) => updateTransform({x: Number(event.target.value)})}
+            />
+          </label>
+          <label>
+            <span>
+              上下{' '}
+              <input
+                className="value-input"
+                type="number"
+                min="-80"
+                max="80"
+                step="1"
+                value={selectedTransform.y}
+                onChange={(event) =>
+                  updateTransformNumber('y', event.target.value, MIN_IMAGE_OFFSET, MAX_IMAGE_OFFSET)
+                }
+              />
+            </span>
+            <input
+              type="range"
+              min="-80"
+              max="80"
+              value={selectedTransform.y}
+              disabled={!selectedPhoto}
+              onChange={(event) => updateTransform({y: Number(event.target.value)})}
+            />
+          </label>
+          <label>
+            <span>
+              旋转{' '}
+              <input
+                className="value-input"
+                type="number"
+                min="-180"
+                max="180"
+                step="0.1"
+                value={selectedTransform.rotation ?? 0}
+                onChange={(event) =>
+                  updateTransformNumber('rotation', event.target.value, -180, 180)
+                }
+              />
+            </span>
+            <input
+              type="range"
+              min="-180"
+              max="180"
+              step="1"
+              value={selectedTransform.rotation ?? 0}
+              disabled={!selectedPhoto}
+              onChange={(event) => updateTransform({rotation: Number(event.target.value)})}
+            />
+          </label>
+          <button
+            className="rotation-drag"
+            disabled={!selectedPhoto}
+            onPointerDown={beginRotationDrag}
+            onPointerMove={moveRotationDrag}
+            onPointerUp={endRotationDrag}
+            onPointerCancel={endRotationDrag}
+          >
+            ↻ 按住并左右拖动旋转
+          </button>
+          <button className="reset" onClick={resetTransform} disabled={!selectedPhoto}>
+            重置当前图片
+          </button>
+          <div className="shortcuts">
+            <b>鼠标与键盘</b>
+            <p>
+              <span className="mouse-key">拖动</span> 直接移动图片
+            </p>
+            <p>
+              <span className="mouse-key">右键</span> 点击位置居中并自动补足缩放
+            </p>
+            <p>
+              <span className="mouse-key">滚轮</span> 缩放图片
+            </p>
+            <p>
+              <kbd>Option</kbd>/<kbd>Alt</kbd> + 滚轮旋转
+            </p>
+            <p>
+              <kbd>↑</kbd>
+              <kbd>↓</kbd>
+              <kbd>←</kbd>
+              <kbd>→</kbd> 移动 1%
+            </p>
+            <p>
+              <kbd>PgUp</kbd>
+              <kbd>PgDn</kbd> 上一页 / 下一页
+            </p>
+            <p>
+              <kbd>Enter</kbd> 确认已排版
+            </p>
+            <p>
+              <kbd>R</kbd> 顺时针旋转 5°
+            </p>
+            <p>
+              <kbd>Shift</kbd>+<kbd>R</kbd> 逆时针旋转 5°
+            </p>
+            <p>
+              <kbd>+</kbd>
+              <kbd>-</kbd> 缩放· <kbd>0</kbd> 重置
+            </p>
+          </div>
+        </aside>
+      </div>
+      <footer className="export-bar">
+        <div>
+          <span className={`status-dot ${readyCount ? 'ok' : ''}`} />
+          <div>
+            <b>{progress || message}</b>
+            <small>
+              {orders.length
+                ? `已排版 ${readyCount} / ${orders.length}，可导出 ${readyShipmentCount} 份`
+                : '等待导入订单'}
+            </small>
+          </div>
+        </div>
+        <div className="export-actions">
+          <button disabled={!selectedOrder || busy || !template} onClick={exportCurrent}>
+            导出当前{' '}
+            {selectedOrder && selectedOrder.quantity > 1 ? `×${selectedOrder.quantity}` : ''}
+          </button>
+          <button
+            className="folder-export"
+            disabled={!readyCount || busy || !template}
+            onClick={exportPdfsToFolder}
+          >
+            PDF导出到文件夹
+          </button>
+          <button
+            className="batch-export"
+            disabled={!readyCount || busy || !template}
+            onClick={exportAll}
+          >
+            ZIP批量导出 <span>{readyShipmentCount}</span>
+          </button>
+        </div>
+      </footer>
+      {lightboxPage !== null && selectedOrder && pages[lightboxPage] && (
+        <div className="page-lightbox" onClick={() => setLightboxPage(null)}>
+          <button className="lightbox-close" onClick={() => setLightboxPage(null)}>
+            ×
+          </button>
+          <button
+            className="lightbox-nav prev"
+            disabled={lightboxPage === 0}
+            onClick={(event) => {
+              event.stopPropagation();
+              const next = Math.max(0, lightboxPage - 1);
+              setLightboxPage(next);
+              setSelectedPage(next);
+            }}
+          >
+            ‹ 上一张
+          </button>
+          <div className="lightbox-content" onClick={(event) => event.stopPropagation()}>
+            <div
+              className="page-interaction lightbox-interaction"
+              title="拖动图片；滚轮缩放；Option/Alt+滚轮旋转；右键回到中心"
+              onContextMenu={(event) => centerImage(event, lightboxPage, pages[lightboxPage].photo)}
+              onPointerDown={(event) =>
+                beginImageDrag(event, lightboxPage, pages[lightboxPage].photo)
+              }
+              onPointerMove={moveImageDrag}
+              onPointerUp={endImageDrag}
+              onPointerCancel={endImageDrag}
+              onWheel={(event) =>
+                adjustImageWithWheel(event, lightboxPage, pages[lightboxPage].photo)
+              }
+            >
+              <PageVisual
+                templateUrl={templatePages[lightboxPage]}
+                photo={pages[lightboxPage].photo}
+                transform={
+                  selectedOrder.transforms[pages[lightboxPage].photo.id] ?? initialTransform
+                }
+                region={hasCover && lightboxPage === 0 ? regions.cover : regions.inner}
+                label={pages[lightboxPage].label}
+                rotateImported={hasCover && lightboxPage === 0 ? rotateCover : rotateInner}
+                foregroundPages={foregroundPages}
+                showBounds
+                snapGuides={snapGuides?.page === lightboxPage ? snapGuides : undefined}
+                onResizeStart={(event) =>
+                  beginImageResize(event, lightboxPage, pages[lightboxPage].photo)
+                }
+              />
+            </div>
+            <b>
+              {pages[lightboxPage].label} · {pages[lightboxPage].photo.file.name}
+            </b>
+            <div className="lightbox-adjustments">
+              <label>
+                <span>
+                  缩放{' '}
+                  <input
+                    className="value-input"
+                    type="number"
+                    min="0.5"
+                    max="5"
+                    step="0.01"
+                    value={selectedTransform.scale}
+                    onChange={(event) => updateTransformNumber('scale', event.target.value, 0.5, 5)}
+                  />
+                </span>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="5"
+                  step=".01"
+                  value={selectedTransform.scale}
+                  onChange={(event) => updateTransform({scale: Number(event.target.value)})}
+                />
+              </label>
+              <label>
+                <span>
+                  左右{' '}
+                  <input
+                    className="value-input"
+                    type="number"
+                    min="-80"
+                    max="80"
+                    step="1"
+                    value={selectedTransform.x}
+                    onChange={(event) =>
+                      updateTransformNumber(
+                        'x',
+                        event.target.value,
+                        MIN_IMAGE_OFFSET,
+                        MAX_IMAGE_OFFSET
+                      )
+                    }
+                  />
+                </span>
+                <input
+                  type="range"
+                  min="-80"
+                  max="80"
+                  value={selectedTransform.x}
+                  onChange={(event) => updateTransform({x: Number(event.target.value)})}
+                />
+              </label>
+              <label>
+                <span>
+                  上下{' '}
+                  <input
+                    className="value-input"
+                    type="number"
+                    min="-80"
+                    max="80"
+                    step="1"
+                    value={selectedTransform.y}
+                    onChange={(event) =>
+                      updateTransformNumber(
+                        'y',
+                        event.target.value,
+                        MIN_IMAGE_OFFSET,
+                        MAX_IMAGE_OFFSET
+                      )
+                    }
+                  />
+                </span>
+                <input
+                  type="range"
+                  min="-80"
+                  max="80"
+                  value={selectedTransform.y}
+                  onChange={(event) => updateTransform({y: Number(event.target.value)})}
+                />
+              </label>
+              <label>
+                <span>
+                  旋转{' '}
+                  <input
+                    className="value-input"
+                    type="number"
+                    min="-180"
+                    max="180"
+                    step="0.1"
+                    value={selectedTransform.rotation ?? 0}
+                    onChange={(event) =>
+                      updateTransformNumber('rotation', event.target.value, -180, 180)
+                    }
+                  />
+                </span>
+                <input
+                  type="range"
+                  min="-180"
+                  max="180"
+                  step="1"
+                  value={selectedTransform.rotation ?? 0}
+                  onChange={(event) => updateTransform({rotation: Number(event.target.value)})}
+                />
+              </label>
+            </div>
+          </div>
+          {selectedOrder.preview && (
+            <aside className="lightbox-reference">
+              <b>合成预览图</b>
+              <img src={selectedOrder.preview.url} alt="合成预览图" />
+              <small>仅供对照，不参与导出</small>
+            </aside>
+          )}
+          <button
+            className="lightbox-nav next"
+            disabled={lightboxPage === pages.length - 1}
+            onClick={(event) => {
+              event.stopPropagation();
+              const next = Math.min(pages.length - 1, lightboxPage + 1);
+              setLightboxPage(next);
+              setSelectedPage(next);
+            }}
+          >
+            下一张 ›
+          </button>
+        </div>
+      )}
+      {previewLightbox && selectedOrder?.preview && (
+        <div className="preview-lightbox" onClick={() => setPreviewLightbox(false)}>
+          <button onClick={() => setPreviewLightbox(false)}>×</button>
+          <img
+            src={selectedOrder.preview.url}
+            alt="合成预览图放大"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      )}
+      {editingTemplate && selectedTemplate && (
+        <TemplateEditor
+          pages={allTemplatePages}
+          value={regions}
+          templateName={selectedTemplate.name.replace(/\.pdf$/i, '')}
+          hasCover={hasCover}
+          pageCount={templatePageCount}
+          pageMode={pageMode}
+          duplex={duplex}
+          rotateImported={rotateImported}
+          rotateCover={rotateCover}
+          rotateInner={rotateInner}
+          onClose={() => setEditingTemplate(false)}
+          onSave={saveTemplateConfig}
+        />
+      )}
+    </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <AuthGate>
+      <Workshop />
+    </AuthGate>
+  );
+}

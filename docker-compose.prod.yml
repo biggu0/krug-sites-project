@@ -12,13 +12,13 @@ services:
     container_name: krug-sites-prod
     restart: always
     ports:
-      - "${SITES_PORT:-3000}:3000"
+      - '${SITES_PORT:-3000}:3000'
     environment:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
       AUTH_DB_PATH: /app/data/auth-db.json
-      AUTH_COOKIE_SECURE: "false"
+      AUTH_COOKIE_SECURE: 'false'
       TEMPLATE_STORAGE_PROVIDER: ${TEMPLATE_STORAGE_PROVIDER:-cos}
       TEMPLATE_STORAGE_DIR: /app/data/templates
       TENCENT_COS_SECRET_ID: ${TENCENT_COS_SECRET_ID:-}
@@ -34,7 +34,7 @@ services:
     networks:
       - sites-network-prod
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://localhost:3000/']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -48,10 +48,10 @@ services:
           cpus: '0.25'
           memory: 128M
     logging:
-      driver: "json-file"
+      driver: 'json-file'
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: '10m'
+        max-file: '3'
 
 volumes:
   sites-auth-data-prod:

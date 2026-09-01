@@ -99,7 +99,8 @@ COS 模式下：
 
 - 模板 PDF 写入 `PROJECT_PREFIX/ENV_PREFIX/BASE_PATH/{templateId}/{fileName}`，默认路径类似 `calendar/test/uploads/{templateId}/{fileName}`。
 - 前景保护 PDF 写入同一个模板目录。
-- 模板索引写入 `PROJECT_PREFIX/ENV_PREFIX/BASE_PATH/templates.json`。
+- 模板索引、组织归属、区域参数、单双面、页数、旋转等元数据写入账号/模板数据库；Docker 自托管时就是 `/app/data/auth-db.json`。
+- `database` 后备 provider 才会把 PDF 内容写入数据库表 `template_objects`；生产 COS 模式只把 PDF 文件写入 COS。
 - 删除模板时会删除 COS 文件对象并更新索引。
 - 前端仍通过 `/api/templates/:id/file` 和 `/api/templates/:id/foreground` 读取，密钥不会暴露给浏览器。
 
@@ -111,7 +112,6 @@ npm run start:worker
 ```
 
 `start:worker` 会读取本机 `.env`，生成 `dist/server/wrangler.local.json`，再把 COS 配置注入 Wrangler 的 `vars`。原因是 `dist/server/wrangler.json` 是构建产物，默认 `vars` 为空；只在外层 shell 加 env 时，Worker 运行时不一定能读到这些配置。
-
 
 ## 当前部署方式
 
@@ -129,9 +129,10 @@ cd /root/opt/krug-sites-project
 部署脚本会：
 
 1. 检查项目文件、D1 绑定和迁移文件。
-2. 构建 Docker 镜像。
-3. 使用固定 Compose 项目名 `krug-sites-project` 更新当前服务。
-4. 不再执行 `docker-compose down --remove-orphans`，避免误停同机其他项目。
+2. 部署前备份 Docker volume 里的 `/app/data/auth-db.json`。
+3. 构建 Docker 镜像。
+4. 使用固定 Compose 项目名 `krug-sites-project` 更新当前服务。
+5. 不再执行 `docker-compose down --remove-orphans`，避免误停同机其他项目。
 
 当前服务默认端口：
 
@@ -177,13 +178,22 @@ krug-sites-project_sites-auth-data-prod
 docker volume ls | grep sites-auth-data
 ```
 
-备份账号数据：
+部署脚本会自动备份账号、组织和模板索引数据：
+
+```text
+/root/krug-sites-backups/auth-db-YYYYmmdd-HHMMSS.json
+```
+
+可选参数：
 
 ```bash
-docker run --rm \
-  -v krug-sites-project_sites-auth-data-prod:/data \
-  -v "$PWD":/backup \
-  alpine sh -c 'cp /data/auth-db.json /backup/auth-db.backup.json'
+BACKUP_ROOT=/data/krug-sites-backups BACKUP_KEEP=60 ./server-deploy.sh
+```
+
+也可以手动备份：
+
+```bash
+COMPOSE_PROJECT=krug-sites-project BACKUP_ROOT=/root/krug-sites-backups sh scripts/backup-auth-db-volume.sh
 ```
 
 恢复账号数据：
@@ -191,8 +201,51 @@ docker run --rm \
 ```bash
 docker run --rm \
   -v krug-sites-project_sites-auth-data-prod:/data \
-  -v "$PWD":/backup \
-  alpine sh -c 'cp /backup/auth-db.backup.json /data/auth-db.json'
+  -v /root/krug-sites-backups:/backup \
+  alpine sh -c 'cp /backup/auth-db-YYYYmmdd-HHMMSS.json /data/auth-db.json'
+
+docker restart krug-sites-prod
+```
+
+如果账号库里的模板索引已经丢失，但 COS 上的 PDF 文件还在，可以用 COS 对象列表 CSV 重建模板索引：
+
+```bash
+npm run templates:restore-cos -- \
+  --csv /root/cos-object-list.csv \
+  --db /root/auth-db.json \
+  --prefix calendar/prod/uploads/
+```
+
+确认输出的 `Prepared / inserted / skipped` 数量正确后再写入：
+
+```bash
+npm run templates:restore-cos -- \
+  --csv /root/cos-object-list.csv \
+  --db /root/auth-db.json \
+  --prefix calendar/prod/uploads/ \
+  --apply
+```
+
+脚本只恢复索引和默认区域参数；如果原来的精细区域参数没有备份，恢复后需要在模板管理页面重新微调。生产 Docker volume 可以先把文件复制出来恢复，再放回 volume：
+
+```bash
+docker run --rm \
+  -v krug-sites-project_sites-auth-data-prod:/data \
+  -v /root:/backup \
+  alpine sh -c 'cp /data/auth-db.json /backup/auth-db.json'
+
+npm run templates:restore-cos -- \
+  --csv /root/cos-object-list.csv \
+  --db /root/auth-db.json \
+  --prefix calendar/prod/uploads/ \
+  --apply
+
+docker run --rm \
+  -v krug-sites-project_sites-auth-data-prod:/data \
+  -v /root:/backup \
+  alpine sh -c 'cp /backup/auth-db.json /data/auth-db.json'
+
+docker restart krug-sites-prod
 ```
 
 ## OpenAI Sites / Cloudflare 部署
@@ -270,7 +323,7 @@ docker ps
 
 - 自托管长期建议换成真正 SQLite 文件数据库，而不是 JSON 文件模拟层。
 - 如果服务器已经有 PostgreSQL/MySQL，也可以改为集中数据库。
-- 给账号数据增加定时备份，例如每天备份 `auth-db.json`。
+- 部署脚本已经增加部署前备份；仍建议服务器额外配置定时备份，并把备份同步到另一块盘或对象存储。
 - 管理员账号创建后，限制再次访问初始化接口。
 
 ### P2：安全增强
@@ -316,5 +369,5 @@ docker stop krug-sites-smoke
 期望返回：
 
 ```json
-{"setupRequired":true,"user":null}
+{"setupRequired": true, "user": null}
 ```

@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import {chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {dirname, resolve} from 'node:path';
+import {spawn} from 'node:child_process';
 
 const sourceConfigPath = resolve('dist/server/wrangler.json');
 const runtimeConfigPath = resolve('dist/server/wrangler.local.json');
@@ -43,7 +43,7 @@ function parseEnvLine(line) {
   ) {
     value = value.slice(1, -1);
   }
-  return { key, value };
+  return {key, value};
 }
 
 function loadDotEnv() {
@@ -56,16 +56,19 @@ function loadDotEnv() {
 }
 
 function buildWorkerVars(existingVars = {}) {
-  const vars = { ...existingVars };
+  const vars = {...existingVars};
   for (const key of workerEnvKeys) {
     if (process.env[key] !== undefined) vars[key] = process.env[key];
   }
 
   vars.AUTH_COOKIE_SECURE = process.env.AUTH_COOKIE_SECURE ?? 'false';
   vars.TEMPLATE_STORAGE_PROVIDER = process.env.TEMPLATE_STORAGE_PROVIDER ?? 'cos';
-  vars.TENCENT_COS_BASE_PATH = process.env.TENCENT_COS_BASE_PATH ?? process.env.COS_PREFIX ?? 'uploads/';
-  vars.TENCENT_COS_ENV_PREFIX = process.env.TENCENT_COS_ENV_PREFIX ?? process.env.COS_ENV_PREFIX ?? 'test';
-  vars.TENCENT_COS_PROJECT_PREFIX = process.env.TENCENT_COS_PROJECT_PREFIX ?? process.env.COS_PROJECT_PREFIX ?? 'calendar';
+  vars.TENCENT_COS_BASE_PATH =
+    process.env.TENCENT_COS_BASE_PATH ?? process.env.COS_PREFIX ?? 'uploads/';
+  vars.TENCENT_COS_ENV_PREFIX =
+    process.env.TENCENT_COS_ENV_PREFIX ?? process.env.COS_ENV_PREFIX ?? 'test';
+  vars.TENCENT_COS_PROJECT_PREFIX =
+    process.env.TENCENT_COS_PROJECT_PREFIX ?? process.env.COS_PROJECT_PREFIX ?? 'calendar';
   return vars;
 }
 
@@ -95,15 +98,18 @@ function writeRuntimeConfig() {
   config.vars = buildWorkerVars(config.vars);
   assertCosVars(config.vars);
 
-  mkdirSync(dirname(runtimeConfigPath), { recursive: true });
-  writeFileSync(runtimeConfigPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  mkdirSync(dirname(runtimeConfigPath), {recursive: true});
+  writeFileSync(runtimeConfigPath, JSON.stringify(config, null, 2), {mode: 0o600});
   chmodSync(runtimeConfigPath, 0o600);
 
   const prefix = [
     config.vars.TENCENT_COS_PROJECT_PREFIX,
     config.vars.TENCENT_COS_ENV_PREFIX,
     config.vars.TENCENT_COS_BASE_PATH
-  ].filter(Boolean).join('/').replace(/\/+/g, '/');
+  ]
+    .filter(Boolean)
+    .join('/')
+    .replace(/\/+/g, '/');
   console.log(`Worker 本地配置已生成：${runtimeConfigPath}`);
   console.log(`模板存储：${config.vars.TEMPLATE_STORAGE_PROVIDER}，COS 路径：${prefix}`);
 }
@@ -128,7 +134,7 @@ writeRuntimeConfig();
 
 function cleanupRuntimeConfig() {
   try {
-    rmSync(runtimeConfigPath, { force: true });
+    rmSync(runtimeConfigPath, {force: true});
   } catch {
     // Best-effort cleanup only; the file is already written with owner-only permissions.
   }
@@ -150,11 +156,10 @@ const args = [
 ];
 args.push('--persist-to', process.env.WRANGLER_PERSIST_TO || defaultPersistPath);
 
-const wrangler = spawn(
-  'wrangler',
-  args,
-  { stdio: ['inherit', 'pipe', 'pipe'], env: { ...process.env, AUTH_COOKIE_SECURE: 'false' } }
-);
+const wrangler = spawn('wrangler', args, {
+  stdio: ['inherit', 'pipe', 'pipe'],
+  env: {...process.env, AUTH_COOKIE_SECURE: 'false'}
+});
 
 wrangler.stdout.on('data', (chunk) => process.stdout.write(redactOutput(chunk)));
 wrangler.stderr.on('data', (chunk) => process.stderr.write(redactOutput(chunk)));

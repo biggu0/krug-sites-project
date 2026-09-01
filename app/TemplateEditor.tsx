@@ -1,102 +1,928 @@
 'use client';
 
-import { ChangeEvent, MouseEvent, PointerEvent, useMemo, useRef, useState } from 'react';
+import {ChangeEvent, MouseEvent, PointerEvent, useMemo, useRef, useState} from 'react';
 
-export type Point={x:number;y:number;inX?:number;inY?:number;outX?:number;outY?:number};
-export type Region={x:number;y:number;width:number;height:number;curve:number;points?:Point[]};
-export type TemplateRegions={cover:Region;inner:Region};
-type PageMode='all'|'odd'|'even';
-type Drag={index:number;kind:'point'|'in'|'out'};
-type HistoryEntry={mode:'cover'|'inner';points:Point[]};
-type Props={pages:string[];value:TemplateRegions;templateName:string;hasCover:boolean;pageCount?:number;pageSize?:{width:number;height:number};pageMode?:PageMode;duplex?:boolean;rotateImported?:boolean;rotateCover?:boolean;rotateInner?:boolean;onForegroundFile?:(file:File)=>void;onSave:(value:TemplateRegions,name:string,hasCover:boolean,pageMode:PageMode,duplex:boolean,rotateCover:boolean,rotateInner:boolean)=>void|Promise<void>;onClose:()=>void};
+export type Point = {
+  x: number;
+  y: number;
+  inX?: number;
+  inY?: number;
+  outX?: number;
+  outY?: number;
+};
+export type Region = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  curve: number;
+  points?: Point[];
+};
+export type TemplateRegions = {cover: Region; inner: Region};
+type PageMode = 'all' | 'odd' | 'even';
+type Drag = {index: number; kind: 'point' | 'in' | 'out'};
+type HistoryEntry = {mode: 'cover' | 'inner'; points: Point[]};
+type Props = {
+  pages: string[];
+  value: TemplateRegions;
+  templateName: string;
+  hasCover: boolean;
+  pageCount?: number;
+  pageSize?: {width: number; height: number};
+  pageMode?: PageMode;
+  duplex?: boolean;
+  rotateImported?: boolean;
+  rotateCover?: boolean;
+  rotateInner?: boolean;
+  onForegroundFile?: (file: File) => void;
+  onSave: (
+    value: TemplateRegions,
+    name: string,
+    hasCover: boolean,
+    pageMode: PageMode,
+    duplex: boolean,
+    rotateCover: boolean,
+    rotateInner: boolean
+  ) => void | Promise<void>;
+  onClose: () => void;
+};
 
-const n=(value:number)=>Math.max(0,Math.min(100,value));
-const handle=(point:Point,kind:'in'|'out')=>({x:point[`${kind}X`]??point.x,y:point[`${kind}Y`]??point.y});
+const n = (value: number) => Math.max(0, Math.min(100, value));
+const handle = (point: Point, kind: 'in' | 'out') => ({
+  x: point[`${kind}X`] ?? point.x,
+  y: point[`${kind}Y`] ?? point.y
+});
 
-function cubicSvgPoints(path:SVGPathElement,matrix:DOMMatrix|null){
-  const tokens=(path.getAttribute('d')??'').match(/[a-zA-Z]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g)??[],points:Point[]=[],map=(x:number,y:number)=>{const point=matrix?new DOMPoint(x,y).matrixTransform(matrix):new DOMPoint(x,y);return{x:point.x,y:point.y};};
-  let index=0,command='',x=0,y=0,startX=0,startY=0,lastCubic:{x:number;y:number}|null=null,lastQuadratic:{x:number;y:number}|null=null;
-  const isCommand=(value:string|undefined)=>!!value&&/^[a-zA-Z]$/.test(value),number=()=>Number(tokens[index++]),pushLine=(nextX:number,nextY:number)=>{const end=map(nextX,nextY);points.push(end);x=nextX;y=nextY;lastCubic=lastQuadratic=null;},pushCubic=(c1x:number,c1y:number,c2x:number,c2y:number,nextX:number,nextY:number)=>{if(!points.length)points.push(map(x,y));const outgoing=map(c1x,c1y),incoming=map(c2x,c2y),end=map(nextX,nextY),previous=points.at(-1)!;previous.outX=outgoing.x;previous.outY=outgoing.y;points.push({...end,inX:incoming.x,inY:incoming.y});x=nextX;y=nextY;lastCubic={x:c2x,y:c2y};lastQuadratic=null;};
-  while(index<tokens.length){if(isCommand(tokens[index]))command=tokens[index++];if(!command)throw new Error('SVG path 缺少路径命令');const relative=command===command.toLowerCase(),upper=command.toUpperCase(),baseX=x,baseY=y;
-    if(upper==='Z'){x=startX;y=startY;lastCubic=lastQuadratic=null;command='';continue;}
-    if(upper==='M'){const nx=number()+(relative?baseX:0),ny=number()+(relative?baseY:0);x=nx;y=ny;startX=nx;startY=ny;points.push(map(nx,ny));command=relative?'l':'L';lastCubic=lastQuadratic=null;continue;}
-    if(upper==='L'){pushLine(number()+(relative?x:0),number()+(relative?y:0));continue;}
-    if(upper==='H'){pushLine(number()+(relative?x:0),y);continue;}
-    if(upper==='V'){pushLine(x,number()+(relative?y:0));continue;}
-    if(upper==='C'){const ox=x,oy=y,c1x=number()+(relative?ox:0),c1y=number()+(relative?oy:0),c2x=number()+(relative?ox:0),c2y=number()+(relative?oy:0),nx=number()+(relative?ox:0),ny=number()+(relative?oy:0);pushCubic(c1x,c1y,c2x,c2y,nx,ny);continue;}
-    if(upper==='S'){const ox=x,oy=y,c1=lastCubic?{x:2*ox-lastCubic.x,y:2*oy-lastCubic.y}:{x:ox,y:oy},c2x=number()+(relative?ox:0),c2y=number()+(relative?oy:0),nx=number()+(relative?ox:0),ny=number()+(relative?oy:0);pushCubic(c1.x,c1.y,c2x,c2y,nx,ny);continue;}
-    if(upper==='Q'||upper==='T'){const ox=x,oy=y,q=upper==='Q'?{x:number()+(relative?ox:0),y:number()+(relative?oy:0)}:lastQuadratic?{x:2*ox-lastQuadratic.x,y:2*oy-lastQuadratic.y}:{x:ox,y:oy},nx=number()+(relative?ox:0),ny=number()+(relative?oy:0),c1={x:ox+(q.x-ox)*2/3,y:oy+(q.y-oy)*2/3},c2={x:nx+(q.x-nx)*2/3,y:ny+(q.y-ny)*2/3};pushCubic(c1.x,c1.y,c2.x,c2.y,nx,ny);lastQuadratic=q;lastCubic=null;continue;}
+function cubicSvgPoints(path: SVGPathElement, matrix: DOMMatrix | null) {
+  const tokens =
+      (path.getAttribute('d') ?? '').match(/[a-zA-Z]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g) ??
+      [],
+    points: Point[] = [],
+    map = (x: number, y: number) => {
+      const point = matrix ? new DOMPoint(x, y).matrixTransform(matrix) : new DOMPoint(x, y);
+      return {x: point.x, y: point.y};
+    };
+  let index = 0,
+    command = '',
+    x = 0,
+    y = 0,
+    startX = 0,
+    startY = 0,
+    lastCubic: {x: number; y: number} | null = null,
+    lastQuadratic: {x: number; y: number} | null = null;
+  const isCommand = (value: string | undefined) => !!value && /^[a-zA-Z]$/.test(value),
+    number = () => Number(tokens[index++]),
+    pushLine = (nextX: number, nextY: number) => {
+      const end = map(nextX, nextY);
+      points.push(end);
+      x = nextX;
+      y = nextY;
+      lastCubic = lastQuadratic = null;
+    },
+    pushCubic = (
+      c1x: number,
+      c1y: number,
+      c2x: number,
+      c2y: number,
+      nextX: number,
+      nextY: number
+    ) => {
+      if (!points.length) points.push(map(x, y));
+      const outgoing = map(c1x, c1y),
+        incoming = map(c2x, c2y),
+        end = map(nextX, nextY),
+        previous = points.at(-1)!;
+      previous.outX = outgoing.x;
+      previous.outY = outgoing.y;
+      points.push({...end, inX: incoming.x, inY: incoming.y});
+      x = nextX;
+      y = nextY;
+      lastCubic = {x: c2x, y: c2y};
+      lastQuadratic = null;
+    };
+  while (index < tokens.length) {
+    if (isCommand(tokens[index])) command = tokens[index++];
+    if (!command) throw new Error('SVG path 缺少路径命令');
+    const relative = command === command.toLowerCase(),
+      upper = command.toUpperCase(),
+      baseX = x,
+      baseY = y;
+    if (upper === 'Z') {
+      x = startX;
+      y = startY;
+      lastCubic = lastQuadratic = null;
+      command = '';
+      continue;
+    }
+    if (upper === 'M') {
+      const nx = number() + (relative ? baseX : 0),
+        ny = number() + (relative ? baseY : 0);
+      x = nx;
+      y = ny;
+      startX = nx;
+      startY = ny;
+      points.push(map(nx, ny));
+      command = relative ? 'l' : 'L';
+      lastCubic = lastQuadratic = null;
+      continue;
+    }
+    if (upper === 'L') {
+      pushLine(number() + (relative ? x : 0), number() + (relative ? y : 0));
+      continue;
+    }
+    if (upper === 'H') {
+      pushLine(number() + (relative ? x : 0), y);
+      continue;
+    }
+    if (upper === 'V') {
+      pushLine(x, number() + (relative ? y : 0));
+      continue;
+    }
+    if (upper === 'C') {
+      const ox = x,
+        oy = y,
+        c1x = number() + (relative ? ox : 0),
+        c1y = number() + (relative ? oy : 0),
+        c2x = number() + (relative ? ox : 0),
+        c2y = number() + (relative ? oy : 0),
+        nx = number() + (relative ? ox : 0),
+        ny = number() + (relative ? oy : 0);
+      pushCubic(c1x, c1y, c2x, c2y, nx, ny);
+      continue;
+    }
+    if (upper === 'S') {
+      const ox = x,
+        oy = y,
+        c1 = lastCubic ? {x: 2 * ox - lastCubic.x, y: 2 * oy - lastCubic.y} : {x: ox, y: oy},
+        c2x = number() + (relative ? ox : 0),
+        c2y = number() + (relative ? oy : 0),
+        nx = number() + (relative ? ox : 0),
+        ny = number() + (relative ? oy : 0);
+      pushCubic(c1.x, c1.y, c2x, c2y, nx, ny);
+      continue;
+    }
+    if (upper === 'Q' || upper === 'T') {
+      const ox = x,
+        oy = y,
+        q =
+          upper === 'Q'
+            ? {x: number() + (relative ? ox : 0), y: number() + (relative ? oy : 0)}
+            : lastQuadratic
+              ? {x: 2 * ox - lastQuadratic.x, y: 2 * oy - lastQuadratic.y}
+              : {x: ox, y: oy},
+        nx = number() + (relative ? ox : 0),
+        ny = number() + (relative ? oy : 0),
+        c1 = {x: ox + ((q.x - ox) * 2) / 3, y: oy + ((q.y - oy) * 2) / 3},
+        c2 = {x: nx + ((q.x - nx) * 2) / 3, y: ny + ((q.y - ny) * 2) / 3};
+      pushCubic(c1.x, c1.y, c2.x, c2.y, nx, ny);
+      lastQuadratic = q;
+      lastCubic = null;
+      continue;
+    }
     throw new Error(`暂不支持 SVG 路径命令 ${command}，请在设计软件中将轮廓转换为贝塞尔路径`);
   }
-  if(points.length>1&&Math.hypot(points.at(-1)!.x-points[0].x,points.at(-1)!.y-points[0].y)<.001){const closing=points.pop()!;if(closing.inX!==undefined){points[0].inX=closing.inX;points[0].inY=closing.inY;}}
+  if (
+    points.length > 1 &&
+    Math.hypot(points.at(-1)!.x - points[0].x, points.at(-1)!.y - points[0].y) < 0.001
+  ) {
+    const closing = points.pop()!;
+    if (closing.inX !== undefined) {
+      points[0].inX = closing.inX;
+      points[0].inY = closing.inY;
+    }
+  }
   return points;
 }
 
-function mapSvgPoint(element:SVGGraphicsElement,svg:SVGSVGElement,x:number,y:number){
-  const elementMatrix=element.getCTM(),rootMatrix=svg.getCTM(),matrix=elementMatrix&&rootMatrix?rootMatrix.inverse().multiply(elementMatrix):null,point=matrix?new DOMPoint(x,y).matrixTransform(matrix):new DOMPoint(x,y);
-  return{x:point.x,y:point.y};
+function mapSvgPoint(element: SVGGraphicsElement, svg: SVGSVGElement, x: number, y: number) {
+  const elementMatrix = element.getCTM(),
+    rootMatrix = svg.getCTM(),
+    matrix = elementMatrix && rootMatrix ? rootMatrix.inverse().multiply(elementMatrix) : null,
+    point = matrix ? new DOMPoint(x, y).matrixTransform(matrix) : new DOMPoint(x, y);
+  return {x: point.x, y: point.y};
 }
 
-function basicShapePoints(element:SVGGraphicsElement,svg:SVGSVGElement):Point[]{
-  if(element instanceof SVGCircleElement||element instanceof SVGEllipseElement){
-    const cx=element.cx.baseVal.value,cy=element.cy.baseVal.value,rx=element instanceof SVGCircleElement?element.r.baseVal.value:element.rx.baseVal.value,ry=element instanceof SVGCircleElement?element.r.baseVal.value:element.ry.baseVal.value;
-    if(rx<=0||ry<=0)return[];
-    const k=.5522847498307936,map=(px:number,py:number)=>mapSvgPoint(element,svg,px,py),make=(px:number,py:number,incoming:[number,number],outgoing:[number,number]):Point=>{const point=map(px,py),inside=map(...incoming),outside=map(...outgoing);return{...point,inX:inside.x,inY:inside.y,outX:outside.x,outY:outside.y};};
-    return[
-      make(cx,cy-ry,[cx-k*rx,cy-ry],[cx+k*rx,cy-ry]),
-      make(cx+rx,cy,[cx+rx,cy-k*ry],[cx+rx,cy+k*ry]),
-      make(cx,cy+ry,[cx+k*rx,cy+ry],[cx-k*rx,cy+ry]),
-      make(cx-rx,cy,[cx-rx,cy+k*ry],[cx-rx,cy-k*ry]),
+function basicShapePoints(element: SVGGraphicsElement, svg: SVGSVGElement): Point[] {
+  if (element instanceof SVGCircleElement || element instanceof SVGEllipseElement) {
+    const cx = element.cx.baseVal.value,
+      cy = element.cy.baseVal.value,
+      rx = element instanceof SVGCircleElement ? element.r.baseVal.value : element.rx.baseVal.value,
+      ry = element instanceof SVGCircleElement ? element.r.baseVal.value : element.ry.baseVal.value;
+    if (rx <= 0 || ry <= 0) return [];
+    const k = 0.5522847498307936,
+      map = (px: number, py: number) => mapSvgPoint(element, svg, px, py),
+      make = (
+        px: number,
+        py: number,
+        incoming: [number, number],
+        outgoing: [number, number]
+      ): Point => {
+        const point = map(px, py),
+          inside = map(...incoming),
+          outside = map(...outgoing);
+        return {...point, inX: inside.x, inY: inside.y, outX: outside.x, outY: outside.y};
+      };
+    return [
+      make(cx, cy - ry, [cx - k * rx, cy - ry], [cx + k * rx, cy - ry]),
+      make(cx + rx, cy, [cx + rx, cy - k * ry], [cx + rx, cy + k * ry]),
+      make(cx, cy + ry, [cx + k * rx, cy + ry], [cx - k * rx, cy + ry]),
+      make(cx - rx, cy, [cx - rx, cy + k * ry], [cx - rx, cy - k * ry])
     ];
   }
-  if(element instanceof SVGRectElement){
-    const x=element.x.baseVal.value,y=element.y.baseVal.value,width=element.width.baseVal.value,height=element.height.baseVal.value;
-    if(width<=0||height<=0)return[];
-    let rx=element.rx.baseVal.value,ry=element.ry.baseVal.value;
-    if(rx>0&&ry<=0)ry=rx;if(ry>0&&rx<=0)rx=ry;
-    rx=Math.min(Math.max(0,rx),width/2);ry=Math.min(Math.max(0,ry),height/2);
-    if(rx<=0||ry<=0)return[mapSvgPoint(element,svg,x,y),mapSvgPoint(element,svg,x+width,y),mapSvgPoint(element,svg,x+width,y+height),mapSvgPoint(element,svg,x,y+height)];
-    const k=.5522847498307936,map=(px:number,py:number)=>mapSvgPoint(element,svg,px,py),make=(px:number,py:number,incoming?:[number,number],outgoing?:[number,number]):Point=>{const point=map(px,py),inside=incoming?map(...incoming):null,outside=outgoing?map(...outgoing):null;return{...point,...(inside?{inX:inside.x,inY:inside.y}:{}),...(outside?{outX:outside.x,outY:outside.y}:{})};};
-    return[
-      make(x+rx,y,[x+rx-k*rx,y]),
-      make(x+width-rx,y,undefined,[x+width-rx+k*rx,y]),
-      make(x+width,y+ry,[x+width,y+ry-k*ry]),
-      make(x+width,y+height-ry,undefined,[x+width,y+height-ry+k*ry]),
-      make(x+width-rx,y+height,[x+width-rx+k*rx,y+height]),
-      make(x+rx,y+height,undefined,[x+rx-k*rx,y+height]),
-      make(x,y+height-ry,[x,y+height-ry+k*ry]),
-      make(x,y+ry,undefined,[x,y+ry-k*ry]),
+  if (element instanceof SVGRectElement) {
+    const x = element.x.baseVal.value,
+      y = element.y.baseVal.value,
+      width = element.width.baseVal.value,
+      height = element.height.baseVal.value;
+    if (width <= 0 || height <= 0) return [];
+    let rx = element.rx.baseVal.value,
+      ry = element.ry.baseVal.value;
+    if (rx > 0 && ry <= 0) ry = rx;
+    if (ry > 0 && rx <= 0) rx = ry;
+    rx = Math.min(Math.max(0, rx), width / 2);
+    ry = Math.min(Math.max(0, ry), height / 2);
+    if (rx <= 0 || ry <= 0)
+      return [
+        mapSvgPoint(element, svg, x, y),
+        mapSvgPoint(element, svg, x + width, y),
+        mapSvgPoint(element, svg, x + width, y + height),
+        mapSvgPoint(element, svg, x, y + height)
+      ];
+    const k = 0.5522847498307936,
+      map = (px: number, py: number) => mapSvgPoint(element, svg, px, py),
+      make = (
+        px: number,
+        py: number,
+        incoming?: [number, number],
+        outgoing?: [number, number]
+      ): Point => {
+        const point = map(px, py),
+          inside = incoming ? map(...incoming) : null,
+          outside = outgoing ? map(...outgoing) : null;
+        return {
+          ...point,
+          ...(inside ? {inX: inside.x, inY: inside.y} : {}),
+          ...(outside ? {outX: outside.x, outY: outside.y} : {})
+        };
+      };
+    return [
+      make(x + rx, y, [x + rx - k * rx, y]),
+      make(x + width - rx, y, undefined, [x + width - rx + k * rx, y]),
+      make(x + width, y + ry, [x + width, y + ry - k * ry]),
+      make(x + width, y + height - ry, undefined, [x + width, y + height - ry + k * ry]),
+      make(x + width - rx, y + height, [x + width - rx + k * rx, y + height]),
+      make(x + rx, y + height, undefined, [x + rx - k * rx, y + height]),
+      make(x, y + height - ry, [x, y + height - ry + k * ry]),
+      make(x, y + ry, undefined, [x, y + ry - k * ry])
     ];
   }
-  if(element instanceof SVGPolygonElement||element instanceof SVGPolylineElement){const raw=Array.from(element.points).map(point=>mapSvgPoint(element,svg,point.x,point.y));if(element instanceof SVGPolylineElement&&raw.length>1&&Math.hypot(raw.at(-1)!.x-raw[0].x,raw.at(-1)!.y-raw[0].y)>.001)return[];if(raw.length>1&&Math.hypot(raw.at(-1)!.x-raw[0].x,raw.at(-1)!.y-raw[0].y)<.001)raw.pop();return raw;}
-  return[];
+  if (element instanceof SVGPolygonElement || element instanceof SVGPolylineElement) {
+    const raw = Array.from(element.points).map((point) =>
+      mapSvgPoint(element, svg, point.x, point.y)
+    );
+    if (
+      element instanceof SVGPolylineElement &&
+      raw.length > 1 &&
+      Math.hypot(raw.at(-1)!.x - raw[0].x, raw.at(-1)!.y - raw[0].y) > 0.001
+    )
+      return [];
+    if (raw.length > 1 && Math.hypot(raw.at(-1)!.x - raw[0].x, raw.at(-1)!.y - raw[0].y) < 0.001)
+      raw.pop();
+    return raw;
+  }
+  return [];
 }
 
-export default function TemplateEditor({pages,value,templateName,hasCover,pageCount=pages.length,pageSize,pageMode='all',duplex=false,rotateImported=false,rotateCover,rotateInner,onForegroundFile,onSave,onClose}:Props){
-  const initialRotateCover=rotateCover??rotateImported,initialRotateInner=rotateInner??rotateImported;
-  const [mode,setMode]=useState<'cover'|'inner'>(hasCover?'cover':'inner'),[regions,setRegions]=useState(value),[zoom,setZoom]=useState(1.15),[selected,setSelected]=useState(0),[name,setName]=useState(templateName),[draftHasCover,setDraftHasCover]=useState(hasCover),[draftPageMode,setDraftPageMode]=useState<PageMode>(pageMode),[draftDuplex,setDraftDuplex]=useState(duplex),[draftRotateCover,setDraftRotateCover]=useState(initialRotateCover),[draftRotateInner,setDraftRotateInner]=useState(initialRotateInner),[saveError,setSaveError]=useState(''),[saving,setSaving]=useState(false),[history,setHistory]=useState<HistoryEntry[]>([]),[cursor,setCursor]=useState<{x:number;y:number}|null>(null),[detectedPageSize,setDetectedPageSize]=useState(pageSize??{width:595.276,height:841.89});
-  const stage=useRef<HTMLDivElement>(null),drag=useRef<Drag|null>(null),region=regions[mode],points=region.points??[],effectivePageSize=pageSize??detectedPageSize;
-  const innerPageIndex=Array.from({length:pageCount},(_,index)=>index+1).find(page=>(!draftHasCover||page!==1)&&(draftPageMode==='all'||(draftPageMode==='odd'?page%2===1:page%2===0)))??1;
-  const previewPageIndex=mode==='cover'?0:innerPageIndex-1;
-  const remember=()=>setHistory(current=>[...current.slice(-99),{mode,points:points.map(point=>({...point}))}]);
-  const setPoints=(next:Point[],record=true)=>{if(record)remember();setRegions(current=>({...current,[mode]:{...current[mode],points:next}}));};
-  const undo=()=>setHistory(current=>{const previous=current.at(-1);if(!previous)return current;setMode(previous.mode);setRegions(value=>({...value,[previous.mode]:{...value[previous.mode],points:previous.points}}));setSelected(Math.max(0,previous.points.length-1));setSaveError('');return current.slice(0,-1);});
-  const locate=(clientX:number,clientY:number)=>{const rect=stage.current!.getBoundingClientRect();return{x:n((clientX-rect.left)/rect.width*100),y:n((clientY-rect.top)/rect.height*100)};};
-  const addPoint=(event:MouseEvent<HTMLDivElement>)=>{if((event.target as Element).closest('svg'))return;const point=locate(event.clientX,event.clientY);setPoints([...points,point]);setSelected(points.length);};
-  const beginDrag=(event:PointerEvent,entry:Drag)=>{event.stopPropagation();remember();drag.current=entry;(event.currentTarget as Element).setPointerCapture(event.pointerId);setSelected(entry.index);};
-  const moveDrag=(event:PointerEvent)=>{setCursor(locate(event.clientX,event.clientY));if(!drag.current)return;const next=[...points],position=locate(event.clientX,event.clientY),{index,kind}=drag.current,point={...next[index]};if(kind==='point'){const dx=position.x-point.x,dy=position.y-point.y;point.x=position.x;point.y=position.y;if(point.inX!==undefined){point.inX=n(point.inX+dx);point.inY=n((point.inY??point.y)+dy);}if(point.outX!==undefined){point.outX=n(point.outX+dx);point.outY=n((point.outY??point.y)+dy);}}else{point[`${kind}X`]=position.x;point[`${kind}Y`]=position.y;}next[index]=point;setPoints(next,false);};
-  const updatePoint=(index:number,patch:Partial<Point>)=>{const next=[...points];next[index]={...next[index],...patch};setPoints(next);};
-  const enableCurve=(index:number)=>{const next=[...points],point=next[index],previous=next[(index-1+next.length)%next.length]??point,following=next[(index+1)%next.length]??point,dx=(following.x-previous.x)*.16,dy=(following.y-previous.y)*.16;next[index]={...point,inX:n(point.x-dx),inY:n(point.y-dy),outX:n(point.x+dx),outY:n(point.y+dy)};setPoints(next);};
-  const transformOutline=(scale:number,dx=0,dy=0)=>{if(!points.length)return;const cx=points.reduce((sum,point)=>sum+point.x,0)/points.length,cy=points.reduce((sum,point)=>sum+point.y,0)/points.length,adjust=(x:number,y:number)=>({x:n(cx+(x-cx)*scale+dx),y:n(cy+(y-cy)*scale+dy)});setPoints(points.map(point=>{const position=adjust(point.x,point.y),incoming=adjust(point.inX??point.x,point.inY??point.y),outgoing=adjust(point.outX??point.x,point.outY??point.y);return{...point,...position,...(point.inX===undefined?{}:{inX:incoming.x,inY:incoming.y}),...(point.outX===undefined?{}:{outX:outgoing.x,outY:outgoing.y})};}));};
-  const importSvg=async(event:ChangeEvent<HTMLInputElement>)=>{const file=event.target.files?.[0];event.target.value='';if(!file)return;let host:HTMLDivElement|undefined;try{const documentNode=new DOMParser().parseFromString(await file.text(),'image/svg+xml'),source=documentNode.documentElement;if(source.tagName.toLowerCase()!=='svg'||documentNode.querySelector('parsererror'))throw new Error('SVG格式无效');const viewBox=(source.getAttribute('viewBox')??`0 0 ${source.getAttribute('width')??100} ${source.getAttribute('height')??100}`).trim().split(/[ ,]+/).map(Number),[vx,vy,vw,vh]=viewBox.length===4&&viewBox.every(Number.isFinite)&&viewBox[2]>0&&viewBox[3]>0?viewBox:[0,0,100,100];host=document.createElement('div');host.style.cssText='position:fixed;left:-10000px;top:-10000px;width:1000px;height:1000px;visibility:hidden';host.innerHTML=new XMLSerializer().serializeToString(source);document.body.appendChild(host);const svg=host.querySelector('svg')!,paths=Array.from(svg.querySelectorAll('path')).filter(path=>{try{return path.getTotalLength()>0}catch{return false}}),path=paths.sort((a,b)=>b.getTotalLength()-a.getTotalLength())[0];let raw:Point[]=[];if(path){const pathMatrix=path.getCTM(),rootMatrix=svg.getCTM(),matrix=pathMatrix&&rootMatrix?rootMatrix.inverse().multiply(pathMatrix):null;raw=cubicSvgPoints(path,matrix);}else{const shapes=Array.from(svg.querySelectorAll<SVGGraphicsElement>('rect,circle,ellipse,polygon,polyline')).map(element=>({element,area:(()=>{try{const box=element.getBBox();return box.width*box.height;}catch{return 0;}})()})).sort((a,b)=>b.area-a.area);for(const shape of shapes){raw=basicShapePoints(shape.element,svg);if(raw.length>=3)break;}}if(raw.length<3)throw new Error('SVG中没有可用的闭合路径（支持 path、rect、circle、ellipse、polygon 和已闭合的 polyline）');const normalize=(x:number,y:number)=>({x:n((x-vx)/vw*100),y:n((y-vy)/vh*100)});setPoints(raw.map(point=>{const position=normalize(point.x,point.y),incoming=point.inX===undefined?null:normalize(point.inX,point.inY!),outgoing=point.outX===undefined?null:normalize(point.outX,point.outY!);return{...position,...(incoming?{inX:incoming.x,inY:incoming.y}:{}),...(outgoing?{outX:outgoing.x,outY:outgoing.y}:{})};}));setSelected(0);setSaveError('');}catch(error){const message=error instanceof Error?error.message:'SVG轮廓导入失败';setSaveError(message);window.alert(message);}finally{host?.remove();}};
-  const validationError=useMemo(()=>{if(!name.trim())return'请输入模板名称';if(points.length<3)return`当前${mode==='cover'?'封面':'内页'}定制区域至少需要3个坐标点`;if(draftHasCover&&(regions.cover.points?.length??0)<3)return'封面定制区域至少需要3个坐标点';if((regions.inner.points?.length??0)<3)return'内页定制区域至少需要3个坐标点';if(draftDuplex&&draftPageMode==='all')return'双面印刷必须选择仅奇数页或仅偶数页插图';return'';},[name,points.length,mode,draftHasCover,draftDuplex,draftPageMode,regions]);
-  const save=async()=>{if(validationError){setSaveError(validationError);return;}setSaving(true);setSaveError('');try{await onSave(regions,name.trim(),draftHasCover,draftPageMode,draftDuplex,draftRotateCover,draftRotateInner);}catch(error){setSaveError(error instanceof Error?error.message:'模板配置保存失败');}finally{setSaving(false);}};
-  const path=points.length?`${points.map((point,index)=>{if(!index)return`M ${point.x} ${point.y}`;const previous=points[index-1],out=handle(previous,'out'),inside=handle(point,'in');return`C ${out.x} ${out.y} ${inside.x} ${inside.y} ${point.x} ${point.y}`;}).join(' ')}${points.length>2?(()=>{const last=points.at(-1)!,first=points[0],out=handle(last,'out'),inside=handle(first,'in');return` C ${out.x} ${out.y} ${inside.x} ${inside.y} ${first.x} ${first.y} Z`;})():''}`:'';
-  return <div className="editor-backdrop"><section className="template-editor pro-editor">
-    <header><div><b>定制模板绘制</b><span>当前模板：{templateName}</span></div><button onClick={onClose}>×</button></header>
-    <div className="editor-toolbar"><div className="editor-tabs">{draftHasCover&&<button className={mode==='cover'?'active':''} onClick={()=>{setMode('cover');setSelected(0)}}>封面区域</button>}<button className={mode==='inner'?'active':''} onClick={()=>{setMode('inner');setSelected(0)}}>内页区域</button></div><label className="template-name-field">模板名称 <input value={name} onChange={event=>setName(event.target.value)}/></label><label>封面 <select value={draftHasCover?'yes':'no'} onChange={event=>{const next=event.target.value==='yes';setDraftHasCover(next);if(!next)setMode('inner');}}><option value="yes">有封面</option><option value="no">无封面</option></select></label><label>印刷方式 <select value={draftDuplex?'duplex':'single'} onChange={event=>{const next=event.target.value==='duplex';setDraftDuplex(next);if(next&&draftPageMode==='all')setDraftPageMode('odd');}}><option value="single">单面印刷</option><option value="duplex">双面印刷</option></select></label><label>插图页面 <select value={draftPageMode} onChange={event=>setDraftPageMode(event.target.value as PageMode)}><option value="all" disabled={draftDuplex}>全部页面</option><option value="odd">仅奇数页</option><option value="even">仅偶数页</option></select></label>{draftHasCover&&<label>封面图片 <select value={draftRotateCover?'rotate':'normal'} onChange={event=>setDraftRotateCover(event.target.value==='rotate')}><option value="normal">保持方向</option><option value="rotate">旋转180°</option></select></label>}<label>内页图片 <select value={draftRotateInner?'rotate':'normal'} onChange={event=>setDraftRotateInner(event.target.value==='rotate')}><option value="normal">保持方向</option><option value="rotate">旋转180°</option></select></label><label>缩放 <input type="range" min=".7" max="1.8" step=".05" value={zoom} onChange={event=>setZoom(Number(event.target.value))}/><output>{Math.round(zoom*100)}%</output></label></div>
-    <div className="svg-outline-tools"><label>导入 SVG 轮廓<input type="file" accept="image/svg+xml,.svg" onChange={importSvg}/></label><label>导入前景保护 PDF<input type="file" accept="application/pdf,.pdf" onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file){onForegroundFile?.(file);window.dispatchEvent(new CustomEvent('jht-foreground-file',{detail:file}));}}}/></label><button className="undo-outline" disabled={!history.length} onClick={undo}>↶ 撤销上一步</button><span>整体移动</span><button disabled={!points.length} onClick={()=>transformOutline(1,-.1,0)}>←</button><button disabled={!points.length} onClick={()=>transformOutline(1,.1,0)}>→</button><button disabled={!points.length} onClick={()=>transformOutline(1,0,-.1)}>↑</button><button disabled={!points.length} onClick={()=>transformOutline(1,0,.1)}>↓</button><span>整体缩放</span><button disabled={!points.length} onClick={()=>transformOutline(.998)}>－</button><button disabled={!points.length} onClick={()=>transformOutline(1.002)}>＋</button><small>每次移动0.1%，缩放0.2%；可反复点击精确调整</small></div>
-    <div className="editor-body pro-body"><div className="stage-scroll"><div className="draw-stage polygon-stage grid-stage" ref={stage} style={{height:`${(effectivePageSize.width>effectivePageSize.height?520:720)*zoom}px`,aspectRatio:`${effectivePageSize.width}/${effectivePageSize.height}`}} onClick={addPoint} onPointerMove={moveDrag} onPointerLeave={()=>setCursor(null)} onPointerUp={()=>{drag.current=null}}>{cursor&&<span className="drawing-crosshair" style={{left:`${cursor.x}%`,top:`${cursor.y}%`}}/>}<img src={pages[previewPageIndex]} alt="模板页面" draggable={false} onLoad={event=>setDetectedPageSize({width:event.currentTarget.naturalWidth||595.276,height:event.currentTarget.naturalHeight||841.89})}/><svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d={path} className="mask-polygon"/>{points.map((point,index)=>{const incoming=handle(point,'in'),outgoing=handle(point,'out'),active=index===selected;return <g key={index}>{active&&<><line x1={point.x} y1={point.y} x2={incoming.x} y2={incoming.y} className="handle-line"/><line x1={point.x} y1={point.y} x2={outgoing.x} y2={outgoing.y} className="handle-line"/><circle cx={incoming.x} cy={incoming.y} r=".42" className="curve-handle" onPointerDown={event=>beginDrag(event,{index,kind:'in'})}/><circle cx={outgoing.x} cy={outgoing.y} r=".42" className="curve-handle" onPointerDown={event=>beginDrag(event,{index,kind:'out'})}/></>}<circle cx={point.x} cy={point.y} r=".48" className={`mask-point ${active?'active':''}`} onPointerDown={event=>beginDrag(event,{index,kind:'point'})}/><text x={point.x+.7} y={point.y-.7}>{index+1}</text></g>;})}</svg></div></div><aside className="points-panel"><div className="points-head"><b>坐标点</b><span>{points.length}</span></div><p>点击空白处增加节点；拖动绿色节点移动位置。选中节点后拖动圆形手柄调整曲率。</p><div className="point-list">{points.map((point,index)=><div className={`point-row ${selected===index?'active':''}`} key={index} onClick={()=>setSelected(index)}><b>P{index+1}</b><label>X<input type="number" min="0" max="100" step=".1" value={point.x.toFixed(1)} onChange={event=>updatePoint(index,{x:n(Number(event.target.value))})}/></label><label>Y<input type="number" min="0" max="100" step=".1" value={point.y.toFixed(1)} onChange={event=>updatePoint(index,{y:n(Number(event.target.value))})}/></label><button onClick={event=>{event.stopPropagation();setPoints(points.filter((_,item)=>item!==index));setSelected(Math.max(0,index-1));}}>×</button></div>)}</div><div className="point-actions"><button disabled={!points.length} onClick={()=>enableCurve(selected)}>添加曲率手柄</button><button disabled={!history.length} onClick={undo}>撤销上一步</button><button disabled={!points.length} onClick={()=>{setPoints([]);setSelected(0)}}>重新描绘</button></div></aside></div>
-    <footer><span className={saveError?'save-error':''}>{saveError||validationError||`PDF 共 ${pageCount} 页；双面模板只允许选择奇数页或偶数页插图。`}</span><button onClick={onClose}>取消</button><button className="save-region" disabled={saving} onClick={save}>{saving?'保存中…':'保存模板配置'}</button></footer>
-  </section></div>;
+export default function TemplateEditor({
+  pages,
+  value,
+  templateName,
+  hasCover,
+  pageCount = pages.length,
+  pageSize,
+  pageMode = 'all',
+  duplex = false,
+  rotateImported = false,
+  rotateCover,
+  rotateInner,
+  onForegroundFile,
+  onSave,
+  onClose
+}: Props) {
+  const initialRotateCover = rotateCover ?? rotateImported,
+    initialRotateInner = rotateInner ?? rotateImported;
+  const [mode, setMode] = useState<'cover' | 'inner'>(hasCover ? 'cover' : 'inner'),
+    [regions, setRegions] = useState(value),
+    [zoom, setZoom] = useState(1.15),
+    [selected, setSelected] = useState(0),
+    [name, setName] = useState(templateName),
+    [draftHasCover, setDraftHasCover] = useState(hasCover),
+    [draftPageMode, setDraftPageMode] = useState<PageMode>(pageMode),
+    [draftDuplex, setDraftDuplex] = useState(duplex),
+    [draftRotateCover, setDraftRotateCover] = useState(initialRotateCover),
+    [draftRotateInner, setDraftRotateInner] = useState(initialRotateInner),
+    [saveError, setSaveError] = useState(''),
+    [saving, setSaving] = useState(false),
+    [history, setHistory] = useState<HistoryEntry[]>([]),
+    [cursor, setCursor] = useState<{x: number; y: number} | null>(null),
+    [detectedPageSize, setDetectedPageSize] = useState(
+      pageSize ?? {width: 595.276, height: 841.89}
+    );
+  const stage = useRef<HTMLDivElement>(null),
+    drag = useRef<Drag | null>(null),
+    region = regions[mode],
+    points = region.points ?? [],
+    effectivePageSize = pageSize ?? detectedPageSize;
+  const innerPageIndex =
+    Array.from({length: pageCount}, (_, index) => index + 1).find(
+      (page) =>
+        (!draftHasCover || page !== 1) &&
+        (draftPageMode === 'all' || (draftPageMode === 'odd' ? page % 2 === 1 : page % 2 === 0))
+    ) ?? 1;
+  const previewPageIndex = mode === 'cover' ? 0 : innerPageIndex - 1;
+  const remember = () =>
+    setHistory((current) => [
+      ...current.slice(-99),
+      {mode, points: points.map((point) => ({...point}))}
+    ]);
+  const setPoints = (next: Point[], record = true) => {
+    if (record) remember();
+    setRegions((current) => ({...current, [mode]: {...current[mode], points: next}}));
+  };
+  const undo = () =>
+    setHistory((current) => {
+      const previous = current.at(-1);
+      if (!previous) return current;
+      setMode(previous.mode);
+      setRegions((value) => ({
+        ...value,
+        [previous.mode]: {...value[previous.mode], points: previous.points}
+      }));
+      setSelected(Math.max(0, previous.points.length - 1));
+      setSaveError('');
+      return current.slice(0, -1);
+    });
+  const locate = (clientX: number, clientY: number) => {
+    const rect = stage.current!.getBoundingClientRect();
+    return {
+      x: n(((clientX - rect.left) / rect.width) * 100),
+      y: n(((clientY - rect.top) / rect.height) * 100)
+    };
+  };
+  const addPoint = (event: MouseEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest('svg')) return;
+    const point = locate(event.clientX, event.clientY);
+    setPoints([...points, point]);
+    setSelected(points.length);
+  };
+  const beginDrag = (event: PointerEvent, entry: Drag) => {
+    event.stopPropagation();
+    remember();
+    drag.current = entry;
+    (event.currentTarget as Element).setPointerCapture(event.pointerId);
+    setSelected(entry.index);
+  };
+  const moveDrag = (event: PointerEvent) => {
+    setCursor(locate(event.clientX, event.clientY));
+    if (!drag.current) return;
+    const next = [...points],
+      position = locate(event.clientX, event.clientY),
+      {index, kind} = drag.current,
+      point = {...next[index]};
+    if (kind === 'point') {
+      const dx = position.x - point.x,
+        dy = position.y - point.y;
+      point.x = position.x;
+      point.y = position.y;
+      if (point.inX !== undefined) {
+        point.inX = n(point.inX + dx);
+        point.inY = n((point.inY ?? point.y) + dy);
+      }
+      if (point.outX !== undefined) {
+        point.outX = n(point.outX + dx);
+        point.outY = n((point.outY ?? point.y) + dy);
+      }
+    } else {
+      point[`${kind}X`] = position.x;
+      point[`${kind}Y`] = position.y;
+    }
+    next[index] = point;
+    setPoints(next, false);
+  };
+  const updatePoint = (index: number, patch: Partial<Point>) => {
+    const next = [...points];
+    next[index] = {...next[index], ...patch};
+    setPoints(next);
+  };
+  const enableCurve = (index: number) => {
+    const next = [...points],
+      point = next[index],
+      previous = next[(index - 1 + next.length) % next.length] ?? point,
+      following = next[(index + 1) % next.length] ?? point,
+      dx = (following.x - previous.x) * 0.16,
+      dy = (following.y - previous.y) * 0.16;
+    next[index] = {
+      ...point,
+      inX: n(point.x - dx),
+      inY: n(point.y - dy),
+      outX: n(point.x + dx),
+      outY: n(point.y + dy)
+    };
+    setPoints(next);
+  };
+  const transformOutline = (scale: number, dx = 0, dy = 0) => {
+    if (!points.length) return;
+    const cx = points.reduce((sum, point) => sum + point.x, 0) / points.length,
+      cy = points.reduce((sum, point) => sum + point.y, 0) / points.length,
+      adjust = (x: number, y: number) => ({
+        x: n(cx + (x - cx) * scale + dx),
+        y: n(cy + (y - cy) * scale + dy)
+      });
+    setPoints(
+      points.map((point) => {
+        const position = adjust(point.x, point.y),
+          incoming = adjust(point.inX ?? point.x, point.inY ?? point.y),
+          outgoing = adjust(point.outX ?? point.x, point.outY ?? point.y);
+        return {
+          ...point,
+          ...position,
+          ...(point.inX === undefined ? {} : {inX: incoming.x, inY: incoming.y}),
+          ...(point.outX === undefined ? {} : {outX: outgoing.x, outY: outgoing.y})
+        };
+      })
+    );
+  };
+  const importSvg = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    let host: HTMLDivElement | undefined;
+    try {
+      const documentNode = new DOMParser().parseFromString(await file.text(), 'image/svg+xml'),
+        source = documentNode.documentElement;
+      if (source.tagName.toLowerCase() !== 'svg' || documentNode.querySelector('parsererror'))
+        throw new Error('SVG格式无效');
+      const viewBox = (
+          source.getAttribute('viewBox') ??
+          `0 0 ${source.getAttribute('width') ?? 100} ${source.getAttribute('height') ?? 100}`
+        )
+          .trim()
+          .split(/[ ,]+/)
+          .map(Number),
+        [vx, vy, vw, vh] =
+          viewBox.length === 4 && viewBox.every(Number.isFinite) && viewBox[2] > 0 && viewBox[3] > 0
+            ? viewBox
+            : [0, 0, 100, 100];
+      host = document.createElement('div');
+      host.style.cssText =
+        'position:fixed;left:-10000px;top:-10000px;width:1000px;height:1000px;visibility:hidden';
+      host.innerHTML = new XMLSerializer().serializeToString(source);
+      document.body.appendChild(host);
+      const svg = host.querySelector('svg')!,
+        paths = Array.from(svg.querySelectorAll('path')).filter((path) => {
+          try {
+            return path.getTotalLength() > 0;
+          } catch {
+            return false;
+          }
+        }),
+        path = paths.sort((a, b) => b.getTotalLength() - a.getTotalLength())[0];
+      let raw: Point[] = [];
+      if (path) {
+        const pathMatrix = path.getCTM(),
+          rootMatrix = svg.getCTM(),
+          matrix = pathMatrix && rootMatrix ? rootMatrix.inverse().multiply(pathMatrix) : null;
+        raw = cubicSvgPoints(path, matrix);
+      } else {
+        const shapes = Array.from(
+          svg.querySelectorAll<SVGGraphicsElement>('rect,circle,ellipse,polygon,polyline')
+        )
+          .map((element) => ({
+            element,
+            area: (() => {
+              try {
+                const box = element.getBBox();
+                return box.width * box.height;
+              } catch {
+                return 0;
+              }
+            })()
+          }))
+          .sort((a, b) => b.area - a.area);
+        for (const shape of shapes) {
+          raw = basicShapePoints(shape.element, svg);
+          if (raw.length >= 3) break;
+        }
+      }
+      if (raw.length < 3)
+        throw new Error(
+          'SVG中没有可用的闭合路径（支持 path、rect、circle、ellipse、polygon 和已闭合的 polyline）'
+        );
+      const normalize = (x: number, y: number) => ({
+        x: n(((x - vx) / vw) * 100),
+        y: n(((y - vy) / vh) * 100)
+      });
+      setPoints(
+        raw.map((point) => {
+          const position = normalize(point.x, point.y),
+            incoming = point.inX === undefined ? null : normalize(point.inX, point.inY!),
+            outgoing = point.outX === undefined ? null : normalize(point.outX, point.outY!);
+          return {
+            ...position,
+            ...(incoming ? {inX: incoming.x, inY: incoming.y} : {}),
+            ...(outgoing ? {outX: outgoing.x, outY: outgoing.y} : {})
+          };
+        })
+      );
+      setSelected(0);
+      setSaveError('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'SVG轮廓导入失败';
+      setSaveError(message);
+      window.alert(message);
+    } finally {
+      host?.remove();
+    }
+  };
+  const validationError = useMemo(() => {
+    if (!name.trim()) return '请输入模板名称';
+    if (points.length < 3)
+      return `当前${mode === 'cover' ? '封面' : '内页'}定制区域至少需要3个坐标点`;
+    if (draftHasCover && (regions.cover.points?.length ?? 0) < 3)
+      return '封面定制区域至少需要3个坐标点';
+    if ((regions.inner.points?.length ?? 0) < 3) return '内页定制区域至少需要3个坐标点';
+    if (draftDuplex && draftPageMode === 'all') return '双面印刷必须选择仅奇数页或仅偶数页插图';
+    return '';
+  }, [name, points.length, mode, draftHasCover, draftDuplex, draftPageMode, regions]);
+  const save = async () => {
+    if (validationError) {
+      setSaveError(validationError);
+      return;
+    }
+    setSaving(true);
+    setSaveError('');
+    try {
+      await onSave(
+        regions,
+        name.trim(),
+        draftHasCover,
+        draftPageMode,
+        draftDuplex,
+        draftRotateCover,
+        draftRotateInner
+      );
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '模板配置保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const path = points.length
+    ? `${points
+        .map((point, index) => {
+          if (!index) return `M ${point.x} ${point.y}`;
+          const previous = points[index - 1],
+            out = handle(previous, 'out'),
+            inside = handle(point, 'in');
+          return `C ${out.x} ${out.y} ${inside.x} ${inside.y} ${point.x} ${point.y}`;
+        })
+        .join(' ')}${
+        points.length > 2
+          ? (() => {
+              const last = points.at(-1)!,
+                first = points[0],
+                out = handle(last, 'out'),
+                inside = handle(first, 'in');
+              return ` C ${out.x} ${out.y} ${inside.x} ${inside.y} ${first.x} ${first.y} Z`;
+            })()
+          : ''
+      }`
+    : '';
+  return (
+    <div className="editor-backdrop">
+      <section className="template-editor pro-editor">
+        <header>
+          <div>
+            <b>定制模板绘制</b>
+            <span>当前模板：{templateName}</span>
+          </div>
+          <button onClick={onClose}>×</button>
+        </header>
+        <div className="editor-toolbar">
+          <div className="editor-tabs">
+            {draftHasCover && (
+              <button
+                className={mode === 'cover' ? 'active' : ''}
+                onClick={() => {
+                  setMode('cover');
+                  setSelected(0);
+                }}
+              >
+                封面区域
+              </button>
+            )}
+            <button
+              className={mode === 'inner' ? 'active' : ''}
+              onClick={() => {
+                setMode('inner');
+                setSelected(0);
+              }}
+            >
+              内页区域
+            </button>
+          </div>
+          <label className="template-name-field">
+            模板名称 <input value={name} onChange={(event) => setName(event.target.value)} />
+          </label>
+          <label>
+            封面{' '}
+            <select
+              value={draftHasCover ? 'yes' : 'no'}
+              onChange={(event) => {
+                const next = event.target.value === 'yes';
+                setDraftHasCover(next);
+                if (!next) setMode('inner');
+              }}
+            >
+              <option value="yes">有封面</option>
+              <option value="no">无封面</option>
+            </select>
+          </label>
+          <label>
+            印刷方式{' '}
+            <select
+              value={draftDuplex ? 'duplex' : 'single'}
+              onChange={(event) => {
+                const next = event.target.value === 'duplex';
+                setDraftDuplex(next);
+                if (next && draftPageMode === 'all') setDraftPageMode('odd');
+              }}
+            >
+              <option value="single">单面印刷</option>
+              <option value="duplex">双面印刷</option>
+            </select>
+          </label>
+          <label>
+            插图页面{' '}
+            <select
+              value={draftPageMode}
+              onChange={(event) => setDraftPageMode(event.target.value as PageMode)}
+            >
+              <option value="all" disabled={draftDuplex}>
+                全部页面
+              </option>
+              <option value="odd">仅奇数页</option>
+              <option value="even">仅偶数页</option>
+            </select>
+          </label>
+          {draftHasCover && (
+            <label>
+              封面图片{' '}
+              <select
+                value={draftRotateCover ? 'rotate' : 'normal'}
+                onChange={(event) => setDraftRotateCover(event.target.value === 'rotate')}
+              >
+                <option value="normal">保持方向</option>
+                <option value="rotate">旋转180°</option>
+              </select>
+            </label>
+          )}
+          <label>
+            内页图片{' '}
+            <select
+              value={draftRotateInner ? 'rotate' : 'normal'}
+              onChange={(event) => setDraftRotateInner(event.target.value === 'rotate')}
+            >
+              <option value="normal">保持方向</option>
+              <option value="rotate">旋转180°</option>
+            </select>
+          </label>
+          <label>
+            缩放{' '}
+            <input
+              type="range"
+              min=".7"
+              max="1.8"
+              step=".05"
+              value={zoom}
+              onChange={(event) => setZoom(Number(event.target.value))}
+            />
+            <output>{Math.round(zoom * 100)}%</output>
+          </label>
+        </div>
+        <div className="svg-outline-tools">
+          <label>
+            导入 SVG 轮廓
+            <input type="file" accept="image/svg+xml,.svg" onChange={importSvg} />
+          </label>
+          <label>
+            导入前景保护 PDF
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (file) {
+                  onForegroundFile?.(file);
+                  window.dispatchEvent(new CustomEvent('jht-foreground-file', {detail: file}));
+                }
+              }}
+            />
+          </label>
+          <button className="undo-outline" disabled={!history.length} onClick={undo}>
+            ↶ 撤销上一步
+          </button>
+          <span>整体移动</span>
+          <button disabled={!points.length} onClick={() => transformOutline(1, -0.1, 0)}>
+            ←
+          </button>
+          <button disabled={!points.length} onClick={() => transformOutline(1, 0.1, 0)}>
+            →
+          </button>
+          <button disabled={!points.length} onClick={() => transformOutline(1, 0, -0.1)}>
+            ↑
+          </button>
+          <button disabled={!points.length} onClick={() => transformOutline(1, 0, 0.1)}>
+            ↓
+          </button>
+          <span>整体缩放</span>
+          <button disabled={!points.length} onClick={() => transformOutline(0.998)}>
+            －
+          </button>
+          <button disabled={!points.length} onClick={() => transformOutline(1.002)}>
+            ＋
+          </button>
+          <small>每次移动0.1%，缩放0.2%；可反复点击精确调整</small>
+        </div>
+        <div className="editor-body pro-body">
+          <div className="stage-scroll">
+            <div
+              className="draw-stage polygon-stage grid-stage"
+              ref={stage}
+              style={{
+                height: `${(effectivePageSize.width > effectivePageSize.height ? 520 : 720) * zoom}px`,
+                aspectRatio: `${effectivePageSize.width}/${effectivePageSize.height}`
+              }}
+              onClick={addPoint}
+              onPointerMove={moveDrag}
+              onPointerLeave={() => setCursor(null)}
+              onPointerUp={() => {
+                drag.current = null;
+              }}
+            >
+              {cursor && (
+                <span
+                  className="drawing-crosshair"
+                  style={{left: `${cursor.x}%`, top: `${cursor.y}%`}}
+                />
+              )}
+              <img
+                src={pages[previewPageIndex]}
+                alt="模板页面"
+                draggable={false}
+                onLoad={(event) =>
+                  setDetectedPageSize({
+                    width: event.currentTarget.naturalWidth || 595.276,
+                    height: event.currentTarget.naturalHeight || 841.89
+                  })
+                }
+              />
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                <path d={path} className="mask-polygon" />
+                {points.map((point, index) => {
+                  const incoming = handle(point, 'in'),
+                    outgoing = handle(point, 'out'),
+                    active = index === selected;
+                  return (
+                    <g key={index}>
+                      {active && (
+                        <>
+                          <line
+                            x1={point.x}
+                            y1={point.y}
+                            x2={incoming.x}
+                            y2={incoming.y}
+                            className="handle-line"
+                          />
+                          <line
+                            x1={point.x}
+                            y1={point.y}
+                            x2={outgoing.x}
+                            y2={outgoing.y}
+                            className="handle-line"
+                          />
+                          <circle
+                            cx={incoming.x}
+                            cy={incoming.y}
+                            r=".42"
+                            className="curve-handle"
+                            onPointerDown={(event) => beginDrag(event, {index, kind: 'in'})}
+                          />
+                          <circle
+                            cx={outgoing.x}
+                            cy={outgoing.y}
+                            r=".42"
+                            className="curve-handle"
+                            onPointerDown={(event) => beginDrag(event, {index, kind: 'out'})}
+                          />
+                        </>
+                      )}
+                      <circle
+                        cx={point.x}
+                        cy={point.y}
+                        r=".48"
+                        className={`mask-point ${active ? 'active' : ''}`}
+                        onPointerDown={(event) => beginDrag(event, {index, kind: 'point'})}
+                      />
+                      <text x={point.x + 0.7} y={point.y - 0.7}>
+                        {index + 1}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+          </div>
+          <aside className="points-panel">
+            <div className="points-head">
+              <b>坐标点</b>
+              <span>{points.length}</span>
+            </div>
+            <p>点击空白处增加节点；拖动绿色节点移动位置。选中节点后拖动圆形手柄调整曲率。</p>
+            <div className="point-list">
+              {points.map((point, index) => (
+                <div
+                  className={`point-row ${selected === index ? 'active' : ''}`}
+                  key={index}
+                  onClick={() => setSelected(index)}
+                >
+                  <b>P{index + 1}</b>
+                  <label>
+                    X
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step=".1"
+                      value={point.x.toFixed(1)}
+                      onChange={(event) => updatePoint(index, {x: n(Number(event.target.value))})}
+                    />
+                  </label>
+                  <label>
+                    Y
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step=".1"
+                      value={point.y.toFixed(1)}
+                      onChange={(event) => updatePoint(index, {y: n(Number(event.target.value))})}
+                    />
+                  </label>
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setPoints(points.filter((_, item) => item !== index));
+                      setSelected(Math.max(0, index - 1));
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="point-actions">
+              <button disabled={!points.length} onClick={() => enableCurve(selected)}>
+                添加曲率手柄
+              </button>
+              <button disabled={!history.length} onClick={undo}>
+                撤销上一步
+              </button>
+              <button
+                disabled={!points.length}
+                onClick={() => {
+                  setPoints([]);
+                  setSelected(0);
+                }}
+              >
+                重新描绘
+              </button>
+            </div>
+          </aside>
+        </div>
+        <footer>
+          <span className={saveError ? 'save-error' : ''}>
+            {saveError ||
+              validationError ||
+              `PDF 共 ${pageCount} 页；双面模板只允许选择奇数页或偶数页插图。`}
+          </span>
+          <button onClick={onClose}>取消</button>
+          <button className="save-region" disabled={saving} onClick={save}>
+            {saving ? '保存中…' : '保存模板配置'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
 }
