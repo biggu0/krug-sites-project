@@ -34,6 +34,7 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/db ./db
 COPY --from=builder /app/.openai ./.openai
+COPY --from=builder /app/scripts/list-cos-template-objects.mjs ./scripts/list-cos-template-objects.mjs
 COPY package.json ./
 
 RUN mkdir -p /app/data

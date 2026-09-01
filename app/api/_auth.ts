@@ -35,6 +35,12 @@ async function localDatabase():Promise<AuthDb>{
   localDbPromise=(async()=>{
     const fs=await import('node:fs/promises'),path=await import('node:path');
     const filePath=process.env.AUTH_DB_PATH??'./.data/auth-db.json';
+    let mutationQueue:Promise<void>=Promise.resolve();
+    function withMutation<T>(task:()=>Promise<T>){
+      const result=mutationQueue.then(task,task);
+      mutationQueue=result.then(()=>undefined,()=>undefined);
+      return result;
+    }
     function normalizeState(state:Partial<LocalState>):LocalState{
       const now=Date.now();
       const organizations=state.organizations?.length?state.organizations:[{id:defaultOrganizationId,name:defaultOrganizationName,created_at:now,updated_at:now}];
@@ -52,14 +58,31 @@ async function localDatabase():Promise<AuthDb>{
       }
       return{nextUserId:state.nextUserId??1,users,sessions:state.sessions??[],templates,organizations,userOrganizations};
     }
-    async function read():Promise<LocalState>{try{return normalizeState(JSON.parse(await fs.readFile(filePath,'utf8')) as Partial<LocalState>);}catch{return normalizeState({nextUserId:1,users:[],sessions:[],templates:[]});}}
-    async function write(state:LocalState){await fs.mkdir(path.dirname(filePath),{recursive:true});await fs.writeFile(filePath,JSON.stringify(state,null,2));}
+    async function read():Promise<LocalState>{
+      try{return normalizeState(JSON.parse(await fs.readFile(filePath,'utf8')) as Partial<LocalState>);}
+      catch(error){
+        if((error as NodeJS.ErrnoException).code==='ENOENT')return normalizeState({nextUserId:1,users:[],sessions:[],templates:[]});
+        throw new Error(`账号数据库读取失败，已停止写入以保护原数据：${error instanceof Error?error.message:String(error)}`);
+      }
+    }
+    async function write(state:LocalState){
+      const directory=path.dirname(filePath),temporary=`${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`,backup=`${filePath}.bak`;
+      await fs.mkdir(directory,{recursive:true});
+      try{
+        await fs.writeFile(temporary,JSON.stringify(state,null,2));
+        await fs.copyFile(filePath,backup).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});
+        await fs.rename(temporary,filePath);
+      }catch(error){
+        await fs.unlink(temporary).catch(()=>undefined);
+        throw error;
+      }
+    }
     function statement(sql:string):AuthStatement{
       let values:unknown[]=[];
       const normalized=sql.replace(/\s+/g,' ').trim().toUpperCase();
       return{
         bind(...next){values=next;return this;},
-        async run(){
+        async run(){return withMutation(async()=>{
           const state=await read();
           let lastRowId: number|undefined,dirty=false;
           if(normalized.startsWith('INSERT INTO USERS')){
@@ -163,7 +186,7 @@ async function localDatabase():Promise<AuthDb>{
           }
           if(dirty)await write(state);
           return{meta:{last_row_id:lastRowId}};
-        },
+        });},
         async first<T=unknown>(){
           const state=await read(),now=Number(values[1]);
           if(normalized.startsWith('SELECT COUNT(*) AS COUNT FROM USERS'))return{count:state.users.length} as T;
