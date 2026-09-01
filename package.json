@@ -10,6 +10,7 @@
     "build": "node ./scripts/clean-dist.mjs && node ./scripts/prepare-pdfjs-assets.mjs && vinext build",
     "start": "set -a; [ -f .env ] && . ./.env; set +a; vinext start",
     "start:worker": "node ./scripts/start-worker.mjs",
+    "accounts:upsert": "node ./scripts/upsert-auth-user.mjs",
     "templates:restore-cos": "node ./scripts/restore-cos-templates.mjs",
     "sites:package": "npm run build && ./scripts/package-site.sh ./dist/site-package.tar.gz",
     "format": "prettier --write .",

@@ -35,6 +35,44 @@
 - 本地和 Docker 环境里 `AUTH_COOKIE_SECURE` 应该是 `"false"`；如果站点已经通过 HTTPS 访问，可以改为 `"true"`。
 - 账号数据 volume 是否被清空。如果 `auth-db.json` 丢失，系统会重新进入“创建管理员账号”流程。
 
+## 增加或重置账号
+
+Docker 自托管环境可以用脚本直接创建测试账号，脚本会保留模板和组织数据，并在写入前备份 `auth-db.json`：
+
+```bash
+npm run accounts:upsert -- \
+  --db /root/auth-db.json \
+  --username test1 \
+  --password '至少10位的新密码' \
+  --permissions customization,templates \
+  --organization-id org_default
+```
+
+如果用户名已存在，同一条命令会更新密码、权限和组织，并默认清掉该用户旧 session。
+
+生产 volume 中操作时，建议先复制出来修改，再放回去：
+
+```bash
+docker run --rm \
+  -v krug-sites-project_sites-auth-data-prod:/data \
+  -v /root:/backup \
+  alpine sh -c 'cp /data/auth-db.json /backup/auth-db.json'
+
+npm run accounts:upsert -- \
+  --db /root/auth-db.json \
+  --username test1 \
+  --password '至少10位的新密码' \
+  --permissions customization,templates \
+  --organization-id org_default
+
+docker run --rm \
+  -v krug-sites-project_sites-auth-data-prod:/data \
+  -v /root:/backup \
+  alpine sh -c 'cp /backup/auth-db.json /data/auth-db.json'
+
+docker restart krug-sites-prod
+```
+
 ## 数据库技术
 
 托管环境使用 **Cloudflare D1**。D1 是 Cloudflare Workers 上的 SQLite 兼容数据库，适合保存结构化数据，比如用户、权限、session。
