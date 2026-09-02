@@ -82,9 +82,8 @@ function parsePermissions(value) {
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const passwordHash = crypto
-    .createHash('sha256')
-    .update(salt + password)
-    .digest('hex');
+    .pbkdf2Sync(password, Buffer.from(salt, 'hex'), 210000, 32, 'sha256')
+    .toString('hex');
   return {salt, passwordHash};
 }
 

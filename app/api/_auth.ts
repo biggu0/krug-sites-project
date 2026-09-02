@@ -127,21 +127,6 @@ async function localDatabase(): Promise<AuthDb> {
           organizationIds.has(item.organization_id)
         )
       ];
-      const assigned = new Set(
-        userOrganizations.map((item) => `${item.user_id}:${item.organization_id}`)
-      );
-      for (const user of users) {
-        const hasOrganization = userOrganizations.some((item) => item.user_id === user.id);
-        const key = `${user.id}:${defaultOrganizationId}`;
-        if (!hasOrganization && !assigned.has(key)) {
-          userOrganizations.push({
-            user_id: user.id,
-            organization_id: defaultOrganizationId,
-            created_at: now
-          });
-          assigned.add(key);
-        }
-      }
       return {
         nextUserId: state.nextUserId ?? 1,
         users,
